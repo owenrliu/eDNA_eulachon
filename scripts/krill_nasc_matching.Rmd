@@ -1,0 +1,207 @@
+---
+title: "Krill NASC Matching"
+author: "Owen R. Liu"
+date: "2024-01-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(here)
+library(sf)
+library(viridis)
+library(ggsci)
+library(cowplot)
+library(rnaturalearth)
+library(marmap)
+library(contoureR)
+```
+
+# Purpose
+
+The goal of this analysis is to explore patterns in the distribution and relative abundance of krill from [Beth Phillips' work](https://onlinelibrary.wiley.com/doi/full/10.1111/fog.12628). Then, we will spatially match it to our eulachon eDNA samples in order to use krill abundacne as a predictor in eulachon SDMs.
+
+# Import Data
+
+Import the krill backscatter data. The data represent relative krill densities between 50-300 m in the water column, along all transects that collected acoustic data during the years 2019, 2021, and 2023. In the data, ID is a combination of Transect number and Interval (horizontal 0.5 nmi bin, with numbering starting at 1 at the start of each transect), and the min/max depth of each 10m bin. All of the zeroes are still included, along with positive NASC values.
+
+```{r}
+kdf <- read_csv(here('data','HakeSurvey_KrillNASC_0.5nmix10m_cells_2019-2023.csv'))
+```
+
+Import the eulachon samples
+```{r}
+d_obs <- read_rds(here('Data','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
+  mutate(Ct=replace_na(Ct,0)) %>% # delta-models in sdmTMB need this
+  mutate(utm.lon.km=utm.lon.m/1000,
+         utm.lat.km=utm.lat.m/1000)
+```
+
+Background map
+
+```{r}
+#background map
+pred.crs <- terra::rast(here('Data','raster_grid_blake','fivekm_grid.tif')) %>% st_crs()
+coast <- ne_states(country='United States of America',returnclass = 'sf') %>% 
+  filter(name %in% c('California','Oregon','Washington','Nevada')) %>%
+  st_transform(crs = pred.crs)
+```
+
+Bathymetry
+
+```{r}
+# bathy
+limits.for.map <- d_obs %>% 
+  st_as_sf(coords=c('lon','lat'),crs=4326) %>% 
+  st_bbox()+c(-1,-1,1,1) #add an extra degree on each side for buffer
+
+
+b = getNOAA.bathy(lon1 = limits.for.map["xmin"],
+                  lon2 = limits.for.map[ "xmax" ],
+                  lat1 = limits.for.map["ymin"],
+                  lat2 = limits.for.map["ymax"],
+                  resolution = 1,keep = TRUE)
+# make into a dataframe of contours for ggplotting
+bdf <- fortify(b) %>% 
+  contoureR::getContourLines(levels=c(0, -100, -200, -500, -1000,-1500)) %>% 
+  st_as_sf(coords=c("x","y"),crs=4326) %>% 
+  st_transform(pred.crs) %>%
+  mutate(x=st_coordinates(.)[,1],y=st_coordinates(.)[,2]) %>% 
+  st_set_geometry(NULL)
+```
+
+# Visualize Patterns
+
+## Overall Histograms of NASC
+
+```{r}
+ksf <- kdf %>% st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% st_transform(pred.crs)
+# raw
+ksf %>% 
+  ggplot(aes(NASC))+
+  geom_density()+theme_minimal()
+# natural log
+ksf %>% 
+  ggplot(aes(log(NASC)))+
+  geom_density()+theme_minimal()+
+  labs(x="log (NASC)")
+# by depth bin
+ksf %>% 
+  mutate(big_depth_category=cut(Layer_depth_min,10)) %>% 
+  ggplot(aes(log(NASC),color=factor(Year)))+
+  geom_density(size=1.5)+theme_minimal()+
+  scale_color_aaas()+
+  labs(x="log (NASC)",title="Distribution by Depth Category")+
+  facet_wrap(~big_depth_category)
+```
+log (NASC) looks pretty normal, with a heavy left tail (zeroes). When faceted by depth bin, it's clear that in general, there were more krill in 2019 than in 2021 or 2023. 
+
+## Latitude by Depth
+
+```{r,fig.width=8,fig.height=8}
+latdepth_plot <- kdf %>% 
+  mutate(Layer_depth_mid=Layer_depth_min+5) %>% 
+  mutate(NASC=na_if(NASC,0)) %>% 
+  ggplot(aes(Layer_depth_mid,Lat,size=log(NASC+1),color=log(NASC+1)))+
+  geom_point()+
+  scale_color_viridis(option="magma",na.value='gray80')+
+  scale_size_area(max_size=4,na.value=0.5)+
+  facet_wrap(~Year)+
+  theme_minimal()+theme(panel.background = element_rect(color="black",fill=NA))
+latdepth_plot
+```
+This combined figure of latitude, depth, and NASC shows the change in depth distribution by latitude across years. In it, it is clear that there are differences in not only the depth distribution of krill among years (as shown in the last two plots), but also there are hotspots in different places along the coast (e.g., the presence of krill at 40N in 2019 but not really in either subsequent year; the large surface hotspots that occur in 2021 but not in other years at ~38N and ~47N, etc.)
+
+## NASC by Transect
+
+Similar to the above, we can parse the NASC outputs by transect to look at patterns.
+
+```{r}
+krill_by_x <- kdf %>%
+  group_by(Transect) %>% 
+  mutate(xLatMean=mean(Lat)) %>% 
+  arrange(xLatMean) %>% 
+  group_by(Transect,xLatMean) %>% 
+  nest() %>% 
+  mutate(p=purrr::map2(Transect,data,function(x,df){
+    df %>% 
+      ggplot(aes(Layer_depth_min,NASC,color=factor(Year),shape=factor(Year)))+
+      geom_point()+
+      labs(color="Year",shape="Year",x="Depth Layer",y="NASC",title=x)+
+      theme_minimal()+
+      # geom_smooth(se=F)+
+      theme(panel.border = element_rect(fill=NA,color='black'))+
+      scale_color_manual(breaks=c("2019","2021","2023"),values=viridis_pal(option="G",end=0.8)(3),drop=F)+
+      scale_shape_manual(breaks=c("2019","2021","2023"),values=c(16,17,18),drop=F)
+  }))
+```
+
+Latitudinal layout of transects (for reference)
+```{r}
+krill_by_x %>% ggplot(aes(fct_reorder(Transect,xLatMean),xLatMean))+geom_point()+
+  theme_minimal()+
+  theme(axis.text.x=element_text(angle=90,vjust=0))+
+  ggtitle("Mean Transect Latitude")
+```
+Plots of NASC by depth across transects, arranged South to North by average latitude of each transect
+
+```{r,fig.height=8,fig.width=12}
+plts <- krill_by_x %>% pull(p)
+plot_grid(plotlist=plts[1:20],nrow=4)
+plot_grid(plotlist=plts[21:40],nrow=4)
+plot_grid(plotlist=plts[41:60],nrow=4)
+plot_grid(plotlist=plts[61:80],nrow=4)
+plot_grid(plotlist=plts[81:100],nrow=4)
+plot_grid(plotlist=plts[101:120],nrow=4)
+plot_grid(plotlist=plts[121:134],nrow=4)
+```
+
+Some interesting interannual changes are obvious here, both depth shifts between years and magnitude of the signal.
+
+
+## Maps
+
+Similar to the plots above, these are coastwide maps of krill NASC by lumped depth category. Many of the same patterns (e.g., greater abundance in 2019 in many places) are apparent. Shown here (for clarity) are non-zero NASC values only.
+
+```{r,fig.height=8,fig.width=8}
+NASC_by_depth_map <- ksf %>% 
+  mutate(xs=str_remove_all(Transect,"x") %>% as.numeric()) %>% 
+  mutate(big_depth_category=cut(Layer_depth_min,10)) %>%
+  mutate(NASC=na_if(NASC,0)) %>% 
+  filter(xs<95) %>% 
+  arrange(big_depth_category) %>% 
+  group_by(big_depth_category) %>% 
+  nest() %>% 
+  mutate(p=purrr::map2(big_depth_category,data,function(d,df){
+    df %>% 
+      ggplot()+
+      geom_sf(aes(color=log(NASC+1),size=log(NASC+1)))+
+      facet_wrap(~Year,nrow=1)+
+      scale_color_viridis(option="H",limits=c(0,11),na.value='gray80')+
+      scale_size_area(limits=c(0,11),max_size=4,na.value=0.5)+
+      theme_minimal()+
+      ggtitle(d)+
+      theme(panel.border=element_rect(color='black',fill=NA))
+  }))
+NASC_by_depth_map$p
+```
+
+# Match to Eulachon Data
+
+With these comparisons among years in hand, we can spatially match the NASC data to the eulachon eDNA samples. Do spatial matching because the transect numbers are seemingly all mixed up.
+
+```{r}
+kdf <- kdf %>% mutate(transect_num=str_remove_all(Transect,"x") %>% as.integer())
+matchkey <- d_obs %>% distinct(date,year,month,day,station,lat,lon,depth_cat) %>% 
+  mutate(transect1=str_split_i(station,"-",1) %>% as.integer(),
+         transect2=str_split_i(station,"_",1) %>% str_remove_all("x") %>% as.integer()) %>% 
+  mutate(interval1=str_split_i(station,"-",2) %>% as.integer(),
+         interval2=str_split_i(station,"_",2) %>% as.integer()) %>% 
+  mutate(transect_match=coalesce(transect1,transect2),
+         interval_match=coalesce(interval1,interval2)) %>% 
+  left_join(kdf,by=c("date"="Date","year"="Year","month"="Month","depth_cat"="Layer_depth_min","transect_match"="transect_num","interval_match"="Interval"))
+
+##STOPPED HERE, STILL WORKING ON THIS
+```
+
