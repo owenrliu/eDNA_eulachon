@@ -1,0 +1,69 @@
+---
+title: "Eulachon eDNA SDMs"
+author: "Owen R. Liu"
+date: "2024-02-09"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(dplyr.summarise.inform=FALSE)
+library(tidyverse)
+library(here)
+library(sf)
+library(viridis)
+library(ggsci)
+library(cowplot)
+library(rnaturalearth)
+library(marmap)
+library(RANN)
+library(contoureR)
+library(sdmTMB)
+library(nngeo)
+library(corrplot)
+```
+
+# Purpose
+
+Build species distribution models in `sdmTMB` for eulachon, based on spatiotemporal data on eDNA for eulachon (*Thaleichthys pacificus*). The data are structured in three dimensions (latitude, longitude, depth), or four including year, and so we want to build a flexible set of models that can take advantage of this dimensionality of the data to create high-resolution predictions.
+
+We will use environmental covariates to constrain our predictions, based on temperature and salinity, as well as biological productivity variables. In spatiotemporal models, though, we also need to decide how to guide the model to partition variation across different spatial and depth fields (i.e., the spatially autocorrelated parts of the model that are estimated in parallel to the fitted covariates). To explore these options, we decided to try models with different combinations of spatial fields and intercepts:
+
+Spatial field options to try: 
+
+*   One common spatial field across all data
+*   spatial field by depth; spatial field by year
+*   spatial field by depth and year
+
+Intercepts options to try
+
+*   single intercept
+*   random intercept by depth category
+*   random intercept by year
+*   random intercept by depth and year
+
+Combinations of spatial fields and intercepts gives us 16 models to consider. Some of these models will certainly break and/or not converge, particularly the more complex versions.
+
+# Import Data
+
+```{r}
+# load in observed data
+# standards
+d <- read_rds(here('Data',"eulachon qPCR 2019 and 2021 standards clean.rds")) %>% 
+  mutate(Ct=replace_na(Ct,0))# delta-models in sdmTMB need this
+
+d_obs <- read_rds(here('Data','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
+  mutate(Ct=replace_na(Ct,0)) %>% # delta-models in sdmTMB need this
+  mutate(utm.lon.km=utm.lon.m/1000,
+         utm.lat.km=utm.lat.m/1000)
+
+mesh <- make_mesh(d_obs, c("utm.lon.km", "utm.lat.km"), cutoff = 20)
+
+# using only data <=150m depth category
+d_obs_filt <- d_obs %>% filter(depth_cat %in% c(0,50,150))
+mesh_filt <- make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"), cutoff = 20)
+```
+
