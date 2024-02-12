@@ -9,10 +9,11 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE, message=FALSE)
 options(dplyr.summarise.inform=FALSE)
 library(tidyverse)
 library(here)
+library(tictoc)
 library(sf)
 library(viridis)
 library(ggsci)
@@ -23,6 +24,7 @@ library(RANN)
 library(contoureR)
 library(sdmTMB)
 library(nngeo)
+library(contoureR)
 library(corrplot)
 ```
 
@@ -30,12 +32,13 @@ library(corrplot)
 
 Build species distribution models in `sdmTMB` for eulachon, based on spatiotemporal data on eDNA for eulachon (*Thaleichthys pacificus*). The data are structured in three dimensions (latitude, longitude, depth), or four including year, and so we want to build a flexible set of models that can take advantage of this dimensionality of the data to create high-resolution predictions.
 
-We will use environmental covariates to constrain our predictions, based on temperature and salinity, as well as biological productivity variables. In spatiotemporal models, though, we also need to decide how to guide the model to partition variation across different spatial and depth fields (i.e., the spatially autocorrelated parts of the model that are estimated in parallel to the fitted covariates). To explore these options, we decided to try models with different combinations of spatial fields and intercepts:
+We will use environmental covariates to constrain our predictions, based on temperature, salinity, and bottom depth, as well as biological productivity variables. In spatiotemporal models, though, we also need to decide how to guide the model to partition variation across different spatial and depth fields (i.e., the spatially autocorrelated parts of the model that are estimated in parallel to the fitted covariates). To explore these options, we decided to try models with different combinations of spatial fields and intercepts:
 
 Spatial field options to try: 
 
 *   One common spatial field across all data
-*   spatial field by depth; spatial field by year
+*   spatial field by depth
+*   spatial field by year
 *   spatial field by depth and year
 
 Intercepts options to try
@@ -47,23 +50,359 @@ Intercepts options to try
 
 Combinations of spatial fields and intercepts gives us 16 models to consider. Some of these models will certainly break and/or not converge, particularly the more complex versions.
 
-# Import Data
+# Pre-processing
+
+Import eDNA data, covariate data, and build prediction grid
+
+## Import Data
+
+Spatial coordinate reference system we will use for thesse analyses:
+```{r}
+pred.crs <- terra::rast(here('Data','raster_grid_blake','fivekm_grid.tif')) %>% st_crs()
+```
+
+
+Load in our eDNA data
 
 ```{r}
-# load in observed data
-# standards
+# qPCR standards
 d <- read_rds(here('Data',"eulachon qPCR 2019 and 2021 standards clean.rds")) %>% 
   mutate(Ct=replace_na(Ct,0))# delta-models in sdmTMB need this
 
+# field samples
 d_obs <- read_rds(here('Data','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
   mutate(Ct=replace_na(Ct,0)) %>% # delta-models in sdmTMB need this
   mutate(utm.lon.km=utm.lon.m/1000,
          utm.lat.km=utm.lat.m/1000)
 
-mesh <- make_mesh(d_obs, c("utm.lon.km", "utm.lat.km"), cutoff = 20)
-
-# using only data <=150m depth category
+# field samples, filtered such that we are only including depth categories 0 (surface), 50m, and 150m
 d_obs_filt <- d_obs %>% filter(depth_cat %in% c(0,50,150))
-mesh_filt <- make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"), cutoff = 20)
+
+d_obs_sf <- d_obs_filt %>% st_as_sf(coords=c('utm.lon.m','utm.lat.m'),crs=pred.crs)
 ```
 
+## Prediction Grid
+
+This is the 5km grid that we will use to project the models for mapping.
+
+```{r}
+## Prediction
+# MAKE GRID
+grid.pred <- read_rds(here('Data','prediction_grid_5km_sdmTMB.rds'))
+
+# add depth categories
+grid.pred0 <- grid.pred %>% mutate(depth_cat=0)
+grid.pred50 <- grid.pred %>% filter(bathy.bottom.depth<=-50) %>% mutate(depth_cat=50)
+grid.pred150 <- grid.pred %>% filter(bathy.bottom.depth<=-100) %>% mutate(depth_cat=150)
+
+grid.predz <- bind_rows(grid.pred0,grid.pred50,grid.pred150) %>% 
+  mutate(depth_fct=as.factor(depth_cat))
+
+#background map
+coast <- ne_states(country='United States of America',returnclass = 'sf') %>% 
+  filter(name %in% c('California','Oregon','Washington','Nevada')) %>%
+  st_transform(crs = pred.crs)
+```
+
+## Covariate data
+
+Bathymetry/bottom depth
+
+```{r}
+# bathy
+limits.for.map <- d_obs_filt %>% 
+  st_as_sf(coords=c('lon','lat'),crs=4326) %>% 
+  st_bbox()+c(-1,-1,1,1) #add an extra degree on each side for buffer
+
+
+b = getNOAA.bathy(lon1 = limits.for.map["xmin"],
+                  lon2 = limits.for.map[ "xmax" ],
+                  lat1 = limits.for.map["ymin"],
+                  lat2 = limits.for.map["ymax"],
+                  resolution = 1,keep = TRUE)
+# plot(b, image=TRUE, deep=-1000, shallow=0, step=250)
+# make into a dataframe of contours for ggplotting
+bdf <- fortify(b) %>% 
+  contoureR::getContourLines(levels=c(0, -100, -200, -500, -1000,-1500)) %>% 
+  st_as_sf(coords=c("x","y"),crs=4326) %>% 
+  st_transform(pred.crs) %>%
+  mutate(x=st_coordinates(.)[,1],y=st_coordinates(.)[,2]) %>% 
+  st_set_geometry(NULL)
+
+bathy.only.map <- ggplot(bdf,aes(x,y,group=Group,colour=z)) + geom_path()
+# bathy.only.map+coord_equal()
+```
+
+Krill/euphausiid data
+
+```{r}
+edna_krill_metrics <- read_rds(here('model output','edna_krill_metrics.rds')) %>% 
+  filter(depth_cat %in% c(0,50,150))
+  
+d_obs_filt <- d_obs_filt %>% bind_cols(edna_krill_metrics %>% dplyr::select(k1:k5))
+```
+
+## Center Covariates
+
+```{r}
+#center and scale covariates
+d_obs_filt <- d_obs_filt %>% 
+  mutate(across(c(bathy.bottom.depth,k1,k2,k3,k4,k5),list(norm=function(x) as.numeric(scale(x)))))
+```
+
+
+## INLA Mesh
+
+Create the mesh that will be the basis of our estimation---based on the spatial distribution of our sample data, the mesh is created in order to facilitate efficient processing and estimatino of the model in sdmTMB. Instead of calculating enormous covariance matrices in model fitting, we can drastically reduce computation time by using the mesh.
+
+```{r}
+mesh <- make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"), cutoff = 20)
+plot(mesh)
+mesh$mesh$n
+```
+
+Now we are ready to start fitting models
+
+# Fit Models
+
+All models will include a spatial field of some flavor, as well as all of the environmental covariates. They will vary in the specification of the spatial field(s) and the types of offsets/intercepts we impose.
+
+Spatial field options to try: 
+
+*   One common spatial field across all data
+*   spatial field by depth
+*   spatial field by year
+*   spatial field by depth and year
+
+Intercepts options to try
+
+*   single intercept
+*   random intercept by depth category
+*   random intercept by year
+*   random intercept by depth and year
+
+We will do this one at a time, increasing slowly in complexity.
+
+## Common Spatial Field
+
+First, a model with just one common spatial field, and a single intercept.
+
+```{r}
+tic("Fitting model: ")
+f1 <- sdmTMB(
+  Ct ~ 1+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3),
+  data = d_obs_filt,
+  mesh = mesh,
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+#AIC 13313.79
+```
+
+One spatial field, random intercept by depth category
+
+```{r}
+tic("Fitting model: ")
+d_obs_filt$depth_cat <- factor(d_obs_filt$depth_cat)
+f2 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat),
+  data = d_obs_filt,
+  mesh = mesh,
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+#AIC 13246.63
+```
+
+One spatial field, random intercept by year
+
+```{r}
+tic("Fitting model: ")
+d_obs_filt$yr_fct <- as.factor(d_obs_filt$year)
+f3 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+#AIC 13310.52
+```
+
+One spatial field, random intercept by year and depth category
+
+```{r}
+tic("Fitting model: ")
+f4 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat)+(1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+#AIC 13214.31
+```
+
+## Spatial Field by Depth
+
+Spatial field by depth category, single intercept.
+
+```{r}
+m <- model.matrix(Ct ~ as.factor(depth_cat), data = d_obs_filt)
+d_obs_filt$d1 <- m[,1]
+d_obs_filt$d2 <- m[,2]
+d_obs_filt$d3 <- m[,3]
+```
+
+
+```{r}
+tic("Fitting model: ")
+f5 <- sdmTMB(
+  Ct ~ 1+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3),
+  data = d_obs_filt,
+  mesh = mesh,
+  spatial_varying= ~d1+d2+d3,
+  spatiotemporal="off",
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+#AIC 12001.99
+# lots of warnings- seems to have trouble partitioning between spatial and depth
+```
+
+Spatial field by depth category, random intercept by depth category. This one feels weird
+
+```{r}
+tic("Fitting model: ")
+f6 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat),
+  data = d_obs_filt,
+  mesh = mesh,
+  spatial_varying= ~d1+d2+d3,
+  spatiotemporal="off",
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+#AIC 12014.63; similar issues as f5 above
+```
+
+Spatial field by depth category, random intercept by year.
+
+```{r}
+tic("Fitting model: ")
+f7 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  spatial_varying= ~d1+d2+d3,
+  spatiotemporal="off",
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+#AIC 11932.48, similar issues as the two previous models
+```
+
+Spatial field by depth category, random intercept by depth and year
+
+```{r}
+tic("Fitting model: ")
+f8 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat)+(1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  spatial_varying= ~d1+d2+d3,
+  spatiotemporal="off",
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+# AIC 11932.79, but same issues as above
+```
+
+## Spatial Field by Year
+
+Spatial field by year, single intercept.
+
+```{r}
+tic("Fitting model: ")
+f9 <- sdmTMB(
+  Ct ~ 1+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3),
+  data = d_obs_filt,
+  mesh = mesh,
+  time="year",
+  spatiotemporal="IID",
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+#AIC 
+```
+
+Spatial field by year, random intercept by depth category.
+
+```{r}
+tic("Fitting model: ")
+f10 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat),
+  data = d_obs_filt,
+  mesh = mesh,
+  time="year",
+  spatiotemporal="IID",
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+#AIC 
+```
+
+Spatial field by year, random intercept by year.
+
+```{r}
+tic("Fitting model: ")
+f11 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  time="year",
+  spatiotemporal="IID",
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+#AIC 
+```
+
+Spatial field by year, random intercept by depth and year
+
+```{r}
+tic("Fitting model: ")
+f12 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat)+(1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  time="year",
+  spatiotemporal="IID",
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+```
