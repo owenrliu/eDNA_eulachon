@@ -40,7 +40,7 @@ kdf <- read_csv(here('data','HakeSurvey_KrillNASC_0.5nmix10m_cells_2019-2023.csv
 
 Import the eulachon samples
 ```{r}
-d_obs <- read_rds(here('Data','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
+d_obs <- read_rds(here('data','qPCR','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
   mutate(Ct=replace_na(Ct,0)) %>% # delta-models in sdmTMB need this
   mutate(utm.lon.km=utm.lon.m/1000,
          utm.lat.km=utm.lat.m/1000)
@@ -326,7 +326,7 @@ edna_krill_matched_5nn <- d_obs %>%
   mutate(krill=purrr::map(data,match_krill)) %>% 
   ungroup()
 toc()
-# this join takes ~30-35m
+# this join takes ~30-40m
 ```
 
 We end up with a nested data frame of krill data (5 nearest neighbors on the transect, and all depth slices) assigned to each "observation" (row) of the eDNA data.
@@ -406,6 +406,8 @@ edna_krill_metrics <- edna_krill_metrics %>%
   dplyr::select(data,k1:k5) %>% 
   unnest(cols=c(data))
 ```
+
+## Save 
 
 ```{r,eval=F}
 write_rds(edna_krill_metrics,here('model output','edna_krill_metrics.rds'))

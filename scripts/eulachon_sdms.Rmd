@@ -52,25 +52,35 @@ Combinations of spatial fields and intercepts gives us 16 models to consider. So
 
 # Pre-processing
 
-Import eDNA data, covariate data, and build prediction grid
+Import eDNA and covariate data, designate offsets, and build prediction grid. Note that cleaning and joining of the standards and unknown samples has been done in other scripts---one to process the 2019 data, one for 2021, and one to join them. If desired, you can re-run those here, but they are not evaluated out for now to save time.
+
+```{r,eval=F,warning=F,message=F}
+rmarkdown::render(here::here('scripts','process 2019 eulachon data.Rmd'),quiet=TRUE)
+rmarkdown::render(here::here('scripts','process 2021 eulachon data.Rmd'),quiet=TRUE)
+source(here::here('scripts','join_eulachon_qPCR_data.R'))
+
+rm(list=ls())
+```
+
 
 ## Import Data
 
 Spatial coordinate reference system we will use for thesse analyses:
+
 ```{r}
-pred.crs <- terra::rast(here('Data','raster_grid_blake','fivekm_grid.tif')) %>% st_crs()
+pred.crs <- terra::rast(here('data','raster_grid_blake','fivekm_grid.tif')) %>% st_crs()
 ```
 
 
-Load in our eDNA data
+Load in our cleaned and joined eDNA data.
 
 ```{r}
 # qPCR standards
-d <- read_rds(here('Data',"eulachon qPCR 2019 and 2021 standards clean.rds")) %>% 
+d <- read_rds(here('data','qPCR',"eulachon qPCR 2019 and 2021 standards clean.rds")) %>% 
   mutate(Ct=replace_na(Ct,0))# delta-models in sdmTMB need this
 
 # field samples
-d_obs <- read_rds(here('Data','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
+d_obs <- read_rds(here('data','qPCR','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
   mutate(Ct=replace_na(Ct,0)) %>% # delta-models in sdmTMB need this
   mutate(utm.lon.km=utm.lon.m/1000,
          utm.lat.km=utm.lat.m/1000)
@@ -88,12 +98,14 @@ This is the 5km grid that we will use to project the models for mapping.
 ```{r}
 ## Prediction
 # MAKE GRID
-grid.pred <- read_rds(here('Data','prediction_grid_5km_sdmTMB.rds'))
+grid.pred <- read_rds(here('data','prediction_grid_5km_sdmTMB.rds')) %>% 
+  #make bottom depth positive
+  mutate(bathy.bottom.depth=-bathy.bottom.depth)
 
 # add depth categories
 grid.pred0 <- grid.pred %>% mutate(depth_cat=0)
-grid.pred50 <- grid.pred %>% filter(bathy.bottom.depth<=-50) %>% mutate(depth_cat=50)
-grid.pred150 <- grid.pred %>% filter(bathy.bottom.depth<=-100) %>% mutate(depth_cat=150)
+grid.pred50 <- grid.pred %>% filter(bathy.bottom.depth >= 50) %>% mutate(depth_cat=50)
+grid.pred150 <- grid.pred %>% filter(bathy.bottom.depth >= 100) %>% mutate(depth_cat=150)
 
 grid.predz <- bind_rows(grid.pred0,grid.pred50,grid.pred150) %>% 
   mutate(depth_fct=as.factor(depth_cat))
@@ -106,36 +118,19 @@ coast <- ne_states(country='United States of America',returnclass = 'sf') %>%
 
 ## Covariate data
 
-Bathymetry/bottom depth
+Bathymetry/bottom depth was already attached to the samples during pre-processing.
 
-```{r}
-# bathy
-limits.for.map <- d_obs_filt %>% 
-  st_as_sf(coords=c('lon','lat'),crs=4326) %>% 
-  st_bbox()+c(-1,-1,1,1) #add an extra degree on each side for buffer
+### Krill/Euphausiid data
 
+These data on the relative abundance of krill come from Beth Phillips, and are organized in the script `krill_nasc_matching`. As with the raw data cleaning above, we do not evaluate this chunk here and just use the output; but the user can run it if they wish. Be warned that it will take awhile to run.
 
-b = getNOAA.bathy(lon1 = limits.for.map["xmin"],
-                  lon2 = limits.for.map[ "xmax" ],
-                  lat1 = limits.for.map["ymin"],
-                  lat2 = limits.for.map["ymax"],
-                  resolution = 1,keep = TRUE)
-# plot(b, image=TRUE, deep=-1000, shallow=0, step=250)
-# make into a dataframe of contours for ggplotting
-bdf <- fortify(b) %>% 
-  contoureR::getContourLines(levels=c(0, -100, -200, -500, -1000,-1500)) %>% 
-  st_as_sf(coords=c("x","y"),crs=4326) %>% 
-  st_transform(pred.crs) %>%
-  mutate(x=st_coordinates(.)[,1],y=st_coordinates(.)[,2]) %>% 
-  st_set_geometry(NULL)
-
-bathy.only.map <- ggplot(bdf,aes(x,y,group=Group,colour=z)) + geom_path()
-# bathy.only.map+coord_equal()
+```{r,eval=F}
+rmarkdown::render(here::here('scripts','krill_nasc_matching.Rmd'),quiet=TRUE)
 ```
 
-Krill/euphausiid data
 
 ```{r}
+# Load
 edna_krill_metrics <- read_rds(here('model output','edna_krill_metrics.rds')) %>% 
   filter(depth_cat %in% c(0,50,150))
   
@@ -147,25 +142,95 @@ d_obs_filt <- d_obs_filt %>% bind_cols(edna_krill_metrics %>% dplyr::select(k1:k
 ```{r}
 #center and scale covariates
 d_obs_filt <- d_obs_filt %>% 
+  # make bottom depth positive
+  mutate(bathy.bottom.depth=-bathy.bottom.depth) %>% 
+  # center and scale covariates
   mutate(across(c(bathy.bottom.depth,k1,k2,k3,k4,k5),list(norm=function(x) as.numeric(scale(x)))))
 ```
 
+## Designate Offsets
+
+While we are primarily interested in eulachon DNA concentration over space, time, and depth, we do not directly measure this concentration with our observations. Rather, we have replicate qPCR observations assocated with a water sample taken from a Niskin bottle and we have to account for the various modifications that have occurred during water sampling and processing. As part of this, we have a series of offsets that modify the true DNA concentration to affect what we observed in the qPCR. These [offsets](https://pbs-assess.github.io/sdmTMB/articles/model-description.html#offset-terms) will go into the model as log-transformed variables (because we will use a log link), and are scaling factors without estimated coefficients.
+
+We are primarily concerned with two offsets: one for the volume filtered out of each 2.5L Niskin bottle for each sample. Second, some samples were inhibited in PCR, and were diluted to eliminate this inhibition.
+
+```{r}
+d_obs_filt <- d_obs_filt %>% 
+  # volume offset
+  mutate(ln_volume=log(volume),
+  # dilution/inhibition offset       
+         ln_dilution=log(dilution))
+
+# count up the distribution of these offsets
+d_obs_filt %>% 
+  count(volume,ln_volume)
+d_obs_filt %>% 
+  count(dilution,ln_dilution)
+
+# we can add the offsets together to create just one offset vectors since they are additive in log space
+d_obs_filt <- d_obs_filt %>% 
+  mutate(offset_vol_dil=ln_volume+ln_dilution)
+```
 
 ## INLA Mesh
 
 Create the mesh that will be the basis of our estimation---based on the spatial distribution of our sample data, the mesh is created in order to facilitate efficient processing and estimatino of the model in sdmTMB. Instead of calculating enormous covariance matrices in model fitting, we can drastically reduce computation time by using the mesh.
 
 ```{r}
-mesh <- make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"), cutoff = 20)
-plot(mesh)
+# as of 2/13/24, these were the mesh options setup that Ole is using for hake
+# locs <- d_obs_filt %>%
+#   distinct(year,station,utm.lon.km,utm.lat.km) %>% 
+#   st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
+# domain <-fmesher::fm_nonconvex_hull(locs,
+#                               concave = -0.025,
+#                               convex = -0.025)
+# 
+# inla_mesh <- fmesher::fm_mesh_2d_inla(
+#   #loc=locs[,c("utm.lon","utm.lat")],
+#   loc.domain = domain, # coordinates
+#   boundary=domain,
+#   max.edge = c(40, 1000), # max triangle edge length; inner and outer meshes
+#   offset = c(30, 80),  # inner and outer border widths
+#   #max.n.strict=100,#,
+#   cutoff = 64 , # minimum triangle edge length
+#   min.angle=20
+# )
+
+locs <- d_obs_filt %>%
+  distinct(year,station,utm.lon.km,utm.lat.km) %>% 
+  st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
+
+max.edge = diff(range(st_coordinates(locs)[,1]))/5
+bound.outer = diff(range(st_coordinates(locs)[,1]))/3
+
+domain <-fmesher::fm_nonconvex_hull(locs,
+                              concave = -0.025,
+                              convex = -0.025)
+
+inla_mesh <- fmesher::fm_mesh_2d_inla(
+  #loc=locs[,c("utm.lon","utm.lat")],
+  loc.domain = domain, # coordinates
+  boundary=domain,
+  max.edge = c(max.edge,max.edge*10), # max triangle edge length; inner and outer meshes
+  offset = c(max.edge, bound.outer),  # inner and outer border widths
+  #max.n.strict=100,#,
+  # min.angle=20,
+  cutoff = max.edge/2 # minimum triangle edge length
+)
+
+mesh <- make_mesh(d_obs_filt, c("utm.lon.km", "utm.lat.km"), mesh = inla_mesh)
+mesh2 <- make_mesh(d_obs_filt, c("utm.lon.km", "utm.lat.km"), cutoff=20)
 mesh$mesh$n
+mesh2$mesh$n
+plot(mesh)
+plot(mesh2)
 ```
 
 Now we are ready to start fitting models
 
 # Fit Models
 
-All models will include a spatial field of some flavor, as well as all of the environmental covariates. They will vary in the specification of the spatial field(s) and the types of offsets/intercepts we impose.
+All models will include a spatial field of some flavor, as well as all of the environmental covariates and offsets. They will vary in the specification of the spatial field(s) and the types of offsets/intercepts we impose.
 
 Spatial field options to try: 
 
@@ -192,13 +257,16 @@ tic("Fitting model: ")
 f1 <- sdmTMB(
   Ct ~ 1+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3),
   data = d_obs_filt,
-  mesh = mesh,
+  mesh = mesh2,
+  offset= "offset_vol_dil",
   spatial="on",
+  spatiotemporal = "off",
+  time=NULL,
   family = stdcurve(),
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-#AIC 13313.79
+#AIC 13525.31
 ```
 
 One spatial field, random intercept by depth category
@@ -207,9 +275,9 @@ One spatial field, random intercept by depth category
 tic("Fitting model: ")
 d_obs_filt$depth_cat <- factor(d_obs_filt$depth_cat)
 f2 <- sdmTMB(
-  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat),
+  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+(1|depth_cat),
   data = d_obs_filt,
-  mesh = mesh,
+  mesh = mesh2,
   spatial="on",
   family = stdcurve(),
   control = sdmTMBcontrol(stdcurve_df = d)
@@ -406,3 +474,65 @@ f12 <- sdmTMB(
 )
 toc()
 ```
+
+Where we're at so far: models 1 through 4 converged with no issues, and relatively quickly. Models 5-8 seemingly had difficulty apportioning variance between the basic spatial field and the spatially varying coefficients for depth. They converged, but with significant warnings (see,e.g., `sanity(f8)`). Models 9-12 did not appropriately converge.
+
+# Conditional Effects
+
+We can look at the estimated effects of bottom depth and krill on our estimates of eulachon eDNA, conditional on all other variable being held at their means. For now, we use models 1-4 for this.
+
+## Bottom Depth
+
+```{r}
+depth.cond <- purrr::map2_df(list(f1,f2,f3,f4),c("f1","f2","f3","f4"),function(m,n){
+  depths <- tibble(
+    bathy.bottom.depth_norm= seq(min(d_obs_filt$bathy.bottom.depth_norm),max(d_obs_filt$bathy.bottom.depth_norm),length.out=100),
+    year=2019, yr_fct=as.factor(2019),depth_cat=as.factor(50),
+    k5_norm=mean(d_obs_filt$k5_norm))
+  pr <- predict(m,newdata=depths,se_fit=TRUE,re_form=NA)
+  pr %>% mutate(model=n)
+})
+
+depth.cond.p <- depth.cond %>%  
+  mutate(bathy.bottom.depth=bathy.bottom.depth_norm*sd(d_obs_filt$bathy.bottom.depth)+mean(d_obs_filt$bathy.bottom.depth)) %>% 
+  ggplot(aes(bathy.bottom.depth, exp(est),
+  ymin = exp(est - 1.96 * est_se),
+  ymax = exp(est + 1.96 * est_se),
+  fill=model
+)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.4) +
+  scale_x_continuous() +
+  coord_cartesian(expand = F) +
+  labs(x = "Depth (m)", y = "eDNA conc.")
+depth.cond.p
+```
+
+## Krill
+
+```{r}
+krill.cond <- purrr::map2_df(list(f1,f2,f3,f4),c("f1","f2","f3","f4"),function(m,n){
+  depths <- tibble(
+    bathy.bottom.depth_norm= mean(d_obs_filt$bathy.bottom.depth_norm),
+    year=2019, yr_fct=as.factor(2019),depth_cat=as.factor(50),
+    k5_norm=seq(min(d_obs_filt$k5_norm),max(d_obs_filt$k5_norm),length.out=100))
+  pr <- predict(m,newdata=depths,se_fit=TRUE,re_form=NA)
+  pr %>% mutate(model=n)
+})
+
+krill.cond.p <- krill.cond %>%  
+  mutate(k5=k5_norm*sd(d_obs_filt$k5)+mean(d_obs_filt$k5)) %>% 
+  ggplot(aes(k5, exp(est),
+  ymin = exp(est - 1.96 * est_se),
+  ymax = exp(est + 1.96 * est_se),
+  fill=model
+)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.4) +
+  scale_x_continuous() +
+  coord_cartesian(expand = F) +
+  labs(x = "Normalized Krill", y = "eDNA conc.")
+krill.cond.p
+```
+```
+
