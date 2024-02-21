@@ -1,119 +1,246 @@
 # Utils for plotting output of sdmTMB models
+# see https://github.com/ericward-noaa/sdmTMB-stdcurve/blob/main/R/fit.R
 
-make_pred_obs_plots <- function(modelobj,stands){
-  tmbdat <- modelobj$tmb_data
+library(contoureR)
+
+plot_theme <- theme_minimal()+theme(panel.border = element_rect(color="black",fill=NA))
+theme_set(plot_theme)
+
+make_pred_obs_plots <- function(modelobj,stands, model_name="",saveplots=T){
   
-  sdr <- modelobj$sd_report$value
-  sdr <- tibble(param=names(sdr),val=sdr)
-  # theta_stand(i) = std_xi_2(pcr_stand_bin_idx(i)) + std_xi_3(pcr_stand_bin_idx(i)) * (D_bin_stand(i));// - stand_offset);
-  std_xi_2 <- sdr %>% filter(param=='std_xi_2') %>% pull(val)
-  std_xi_3 <- sdr %>% filter(param=='std_xi_3') %>% pull(val)
-  pcr_stand_bin_idx <- tmbdat$pcr_stand_bin_idx+1
-  D_bin_stand <- tmbdat$D_bin_stand
-  theta_stand <- std_xi_2[pcr_stand_bin_idx]+std_xi_3[pcr_stand_bin_idx]*D_bin_stand %>% as.numeric()
-  theta_stand <- tibble(theta_stand=theta_stand) %>% 
-    bind_cols(stands) %>% 
+  r <- modelobj$sd_report$par.random
+  
+  df <- data.frame(id = modelobj$plates$id,
+                   plate = modelobj$plates$plate,
+                   std_xi_0 = r[grep("std_xi_0", names(r))],
+                   std_xi_1 = r[grep("std_xi_1", names(r))],
+                   std_xi_2 = r[grep("std_xi_2", names(r))],
+                   std_xi_3 = r[grep("std_xi_3", names(r))]
+  )
+  
+  pred.samp <- predict(modelobj) %>% 
+    # join hierarchical params for std curves
+    left_join(df,by=join_by(plate)) %>% 
+    mutate(kappa_samp=std_xi_0+std_xi_1*est,
+           theta_samp=std_xi_2+std_xi_3*est) %>% 
     mutate(Ct_bin=ifelse(Ct>0,1,0))
   
-  #kappa_stand(i) = std_xi_0(pcr_stand_pos_idx(i)) + std_xi_1(pcr_stand_pos_idx(i)) * (D_pos_stand(i));// - stand_offset);
-  std_xi_0 <- sdr %>% filter(param=='std_xi_0') %>% pull(val)
-  std_xi_1 <- sdr %>% filter(param=='std_xi_1') %>% pull(val)
-  pcr_stand_pos_idx <- tmbdat$pcr_stand_pos_idx+1
-  D_pos_stand <- tmbdat$D_pos_stand
-  kappa_stand <- std_xi_0[pcr_stand_pos_idx]+std_xi_1[pcr_stand_pos_idx]*D_pos_stand
-  kappa_stand <- tibble(kappa_stand=kappa_stand,plate=modelobj$plates$plate[pcr_stand_pos_idx])
+  pred.stand <- stands %>% 
+    mutate(theta_stand=modelobj$sd_report$value[grep("theta_stand", names(modelobj$sd_report$value))],
+                              kappa_stand=NA) %>% 
+    mutate(Ct_bin=ifelse(Ct>0,1,0))
+  pred.stand$kappa_stand[which(stands$Ct > 0)] <- modelobj$sd_report$value[grep("kappa_stand", names(modelobj$sd_report$value))]
   
-  # bring kappas and thetas together with plates
-  pred.stand <- theta_stand %>% mutate(kappa_stand=NA)
-  pred.stand$kappa_stand[pred.stand$Ct_bin==1] <- kappa_stand$kappa_stand
-
-    #3 Pred- Obs Plots
-  # pred.samp <- data.frame(theta_samp =report$theta_samp,
-  #                         kappa_samp = report$kappa_samp)
-  # pred.stand <- data.frame(theta_stand = report$theta_stand,
-  #                          kappa_stand = report$kappa_stand)
-  # pred.samp <- cbind(dat.samp,pred.samp)
-  # pred.stand <- cbind(dat.stand,pred.stand)
-  # 
-  # pred.stand$sd_pred <- exp(report$ln_std_tau[1] + report$ln_std_tau[2] * pred.stand$ln_copies)
-  # pred.stand <- pred.stand %>% mutate(kappa_plus = kappa_stand+sd_pred,
-  #                                     kappa_minus = kappa_stand-sd_pred)
+  
+  
+  # dplyr::filter(standards, Ct > 0) |>
+  #   ggplot(aes(kappa_stand, Ct)) + geom_point(alpha=0.5) + 
+  #   geom_abline(aes(intercept=0,slope=1),col="red") +
+  #   theme_bw()
   
   ### MAKE SOME STANDARDS PLOTS
-  STAND.BREAKS = c(1,5,10,100,1000,10000,100000)*2
+  STAND.BREAKS = c(1,5,10,100,1000,10000,100000)*2 %>% as.integer()
   
   p_bin_stand <- ggplot(pred.stand) +
     geom_jitter(aes(y=Ct_bin,x=known_conc_ul),width=0,alpha=0.5,height=0.05) +
     geom_point(aes(y=plogis(theta_stand),x=known_conc_ul),color="red") +
-    geom_line(aes(y=plogis(theta_stand),x=known_conc_ul),color="red") +
-    scale_x_continuous(trans="log",breaks = STAND.BREAKS)+
+    geom_line(aes(y=plogis(theta_stand),x=known_conc_ul,group=plate),color="red") +
+    scale_x_continuous(trans="log10",breaks = STAND.BREAKS)+
     facet_wrap(~year) + 
-    theme_bw()
+    labs(x="Known Concentration (copies/uL)",y="Ct",title="Standards: Binary")
   
-  p_bin_stand2 <- ggplot(pred.stand) +
-    geom_jitter(aes(y=Ct_bin,x=known_conc_ul),width=0,alpha=0.5,height=0.05) +
-    geom_point(aes(y=plogis(theta_stand),x=known_conc_ul,color=plate,group=plate)) +
-    geom_line(aes(y=plogis(theta_stand),x=known_conc_ul,color=plate,group=plate)) +
-    scale_x_continuous(trans="log",breaks = STAND.BREAKS)+
-    theme_bw() +
-    theme(legend.position = "none")
-  p_bin_stand2
-  
-  p_pos_stand <- ggplot(pred.stand %>% filter(Ct_bin ==1)) +
+  p_pos_stand <- ggplot(pred.stand %>% filter(Ct_bin==1)) +
     geom_jitter(aes(y=Ct,x=known_conc_ul),width=0,alpha=0.5,height=0.05) +
     #geom_point(aes(y=kappa_stand,x=known_conc_ul),color="red") +
     geom_line(aes(y=kappa_stand,x=known_conc_ul,group=plate,color=plate)) +
     # geom_line(aes(y=kappa_plus,x=known_conc_ul),color="red",linetype="dashed") +
     # geom_line(aes(y=kappa_minus,x=known_conc_ul),color="red",linetype="dashed") +
-    scale_x_continuous(trans="log",breaks = STAND.BREAKS)+
+    scale_x_continuous(trans="log10",breaks = STAND.BREAKS)+
     guides(color='none')+
     facet_wrap(~year) +
-    theme_bw()
-  p_pos_stand
+    labs(x="Known Concentration (copies/uL)",y="Ct",title="Standards: Positive")
+  # p_pos_stand
+  
+  # Unknown samples
+  p_bin_unk <- ggplot(pred.samp) +
+    geom_jitter(aes(y=Ct_bin,x=plogis(theta_samp)),width=0,alpha=0.5,height=0.05) +
+    stat_smooth(aes(y=Ct_bin,x=plogis(theta_samp))) +
+    geom_abline(intercept=0,slope = 1,linetype="dashed",color="red") +
+    scale_x_continuous(limits=c(0,1)) +
+    facet_grid(year~depth_cat)  +
+    labs(title="Unknown Samples: Pres/Abs",x="Predicted Probabiliy of Amplification (theta)",
+         y="Observed Ct>0")
+  # p_bin_unk
+  
 #   
-#   p_pos_stand2 <- ggplot(pred.stand %>% filter(Ct_bin ==1)) +
-#     geom_jitter(aes(y=Ct,x=known_conc_ul,group=year,color=year),width=0,alpha=0.5,height=0.05) +
-#     #geom_point(aes(y=kappa_stand,x=known_conc_ul),color="red") +
-#     geom_line(aes(y=kappa_stand,x=known_conc_ul,group=year,color=year)) +
-#     #geom_line(aes(y=kappa_plus,x=known_conc_ul),color="red",linetype="dashed") +
-#     #geom_line(aes(y=kappa_minus,x=known_conc_ul),color="red",linetype="dashed") +
-#     scale_x_continuous(trans="log",breaks = STAND.BREAKS)+
-#     facet_wrap(~year) + 
-#     theme_bw() +
-#     theme(legend.position = "none")
-#   
-#   # Unknown samples.
-#   p_bin_unk <- ggplot(pred.samp) +
-#     geom_jitter(aes(y=Ct_bin,x=plogis(theta_samp)),width=0,alpha=0.5,height=0.05) +
-#     stat_smooth(aes(y=Ct_bin,x=plogis(theta_samp))) +
-#     geom_abline(intercept=0,slope = 1,linetype="dashed",color="red") +
-#     scale_x_continuous(limits=c(0,1)) +
-#     facet_grid(year~depth_cat)  +
-#     theme_bw()
-#   
-#   p_bin_unk2 <- ggplot(pred.samp) +
-#     geom_jitter(aes(y=Ct_bin,x=plogis(theta_samp)),width=0,alpha=0.5,height=0.05) +
-#     stat_smooth(aes(y=Ct_bin,x=plogis(theta_samp))) +
-#     geom_abline(intercept=0,slope = 1,linetype="dashed",color="red") +
-#     scale_x_continuous(limits=c(0,1)) +
-#     facet_grid(depth_cat ~ year)  +
-#     theme_bw()
-#   
-#   p_pos_unk2 <- ggplot(pred.samp %>% filter(Ct_bin ==1)) +
-#     geom_jitter(aes(y=Ct,x=kappa_samp),width=0,alpha=0.5,height=0.05) +
-#     stat_smooth(aes(y=Ct,x=kappa_samp)) +
-#     geom_abline(intercept=0,slope = 1,linetype="dashed",color="red") +
-#     facet_grid(depth_cat ~ year)  +
-#     theme_bw()
-#   #  scale_x_continuous(limits=c(0,1))
-#   
-#   
-#   pdf(file = here("Plots and figures","Fits Standards and Pred-Obs.pdf"),  
-#       onefile=T,width = 11,height=8.5)
-#   print(p_bin_stand)
-#   print(p_pos_stand)
-#   print(p_bin_unk)
-#   print(p_pos_unk)
-#   dev.off()
-#   
-# }
+  p_pos_unk <- ggplot(pred.samp %>% filter(Ct_bin ==1)) +
+    geom_jitter(aes(y=Ct,x=kappa_samp),width=0,alpha=0.5,height=0.05) +
+    stat_smooth(aes(y=Ct,x=kappa_samp)) +
+    geom_abline(intercept=0,slope = 1,linetype="dashed",color="red") +
+    facet_grid(depth_cat ~ year)  +
+    labs(title="Unknown Samples: Positive",x="Predicted Ct (kappa)",
+         y="Observed Ct")
+  
+  if(saveplots){
+    pdf(file = here("plots",paste(model_name,"Fits Standards and Pred-Obs.pdf")),  
+        onefile=T,width = 11,height=8.5)
+    print(p_bin_stand)
+    print(p_pos_stand)
+    print(p_bin_unk)
+    print(p_pos_unk)
+    dev.off()    
+  }
+  # p_pos_unk
+  # p_bin_unk2
+  allp<-list(
+    p_bin_stand=p_bin_stand,
+    p_pos_stand=p_pos_stand,
+    p_bin_unk=p_bin_unk,
+    p_pos_unk=p_pos_unk
+  )
+  return(allp)
+}
+
+# MAKE MAP OF PREDICTIONS
+
+# coastline
+coast <- ne_states(country='United States of America',returnclass = 'sf') %>%
+  filter(name %in% c('California','Oregon','Washington','Nevada')) %>%
+  st_transform(crs = pred.crs)
+
+# here's the grid to predict with
+grid.pred <- read_rds(here('data','prediction_grid_5km_sdmTMB_with_covars.rds')) %>% 
+  mutate(across(c(thetao,so,bathy.bottom.depth,bottomT),list(ln=function(x){
+    x[x==0]<-1
+    log(x)
+  }))) %>% 
+  # dummy covariate for 'washed'
+  mutate(washed=0) %>% 
+  # factors for year and depth (for some models that need these)
+  mutate(depth_cat=as.factor(depth_cat),
+         yr_fct=as.factor(year)) %>% 
+  mutate(d1=ifelse(depth_cat==0,1,0),
+         d2=ifelse(depth_cat==50,1,0),
+         d3=ifelse(depth_cat==150,1,0))
+
+# bathymetry
+limits.for.map <- d_obs_filt %>% 
+  st_as_sf(coords=c('lon','lat'),crs=4326) %>% 
+  st_bbox()+c(-1,-1,1,1) #add an extra degree on each side for buffer
+
+
+b = getNOAA.bathy(lon1 = limits.for.map["xmin"],
+                  lon2 = limits.for.map[ "xmax" ],
+                  lat1 = limits.for.map["ymin"],
+                  lat2 = limits.for.map["ymax"],
+                  resolution = 1,keep = TRUE)
+# plot(b, image=TRUE, deep=-1000, shallow=0, step=250)
+# make into a dataframe of contours for ggplotting
+bdf <- fortify(b) %>% 
+  contoureR::getContourLines(levels=c(-50, -150, -1000,-1500)) %>% 
+  st_as_sf(coords=c("x","y"),crs=4326) %>% 
+  st_transform(pred.crs) %>%
+  mutate(x=st_coordinates(.)[,1],y=st_coordinates(.)[,2])
+
+# bathy.only.map <- ggplot(bdf,aes(x,y,group=Group,colour=factor(z))) + geom_path()
+# bathy.only.map+coord_equal()
+
+# bounding box
+bbox=st_bbox(grid.pred %>% st_as_sf(coords=c('x','y'),crs=pred.crs))
+coastcrop = st_crop(coast,bbox)
+bathycrop <- st_crop(bdf,bbox) %>% st_set_geometry(NULL)
+
+make_map <- function(dat, column) {
+  ggplot(coastcrop) + geom_sf()+
+    geom_raster(data=dat, aes(x, y, fill = {{ column }})) +
+    facet_grid(year~depth_cat)+
+    theme_minimal()+
+    theme(panel.border = element_rect(color='black',fill=NA),
+          axis.text.x=element_blank())
+}
+
+make_map_bathy <- function(dat, column) {
+  ggplot() + geom_sf(data=coastcrop)+
+    geom_raster(data=dat, aes(x, y, fill = {{ column }})) +
+    geom_path(data=bathycrop,aes(x,y,group=Group),color='gray30')+
+    facet_grid(year~depth_cat)+
+    theme_minimal()+
+    theme(panel.border = element_rect(color='black',fill=NA),
+          axis.text.x=element_blank())
+}
+
+# MAKE PRESENCE-ABSENCE MAP- I THINK WE HAVE TO DO THIS MANUALLY
+
+make_presence_absence_map <- function(modelobj,predgrid=grid.pred){
+  x <- predict(modelobj,newdata=predgrid,nsim=30,model=1)
+  y <- rowMeans(plogis(x))
+  predgrid$pa <- y
+  
+  p1 <- ggplot(coastcrop) + geom_sf()+
+    geom_raster(data=predgrid, aes(x, y, fill = pa)) +
+    facet_grid(year~depth_cat)+
+    scale_fill_viridis(option="C")+
+    theme_minimal()+
+    labs(fill="p(presence)")+
+    theme(panel.border = element_rect(color='black',fill=NA),
+          axis.text.x=element_blank())
+  
+  p2 <- ggplot(coastcrop) + geom_sf()+
+    geom_raster(data=predgrid %>% 
+                  mutate(top5=ifelse(pa>=0.95,T,F)), aes(x, y, fill = top5)) +
+    facet_grid(year~depth_cat)+
+    labs(fill="95% p(presence)")+
+    scale_fill_manual(values=c('gray20','#BD3786FF'))+
+    theme_minimal()+
+    theme(panel.border = element_rect(color='black',fill=NA),
+          axis.text.x=element_blank())
+    
+  return(list(p1,p2))
+}
+# MAKE CONDITIONAL PLOTS WITH PREDICT()
+# not quite there yet
+make_cond_plot <- function(modelobj,v,exp_var=F,saveplot=T,return_dat=F){
+  d <- modelobj$data
+  var_range <- d %>% dplyr::select({{v}}) %>% pull(1) %>% range()
+  varseq <- seq(var_range[1],var_range[2],length.out=100)
+  
+  
+  dmeans <- d %>%
+    # what if we used conditional means based on presence only...
+    # filter(Ct>0) %>% 
+    summarise(across(where(is.numeric),mean)) %>% 
+    # and some factor levels (assume surface, 2019)
+    mutate(depth_cat=factor("0",levels=c("0","50","150")),
+           yr_fct=factor("2019",levels=c("2019","2021")))
+    
+  # if we need factors
+  dmeans
+  dummydat <- map_df(seq_len(length(varseq)),~dmeans) %>% mutate({{v}} := varseq)
+  pr <- predict(modelobj,newdata=dummydat,se_fit=TRUE,re_form=NA)
+  pr <- pr %>% mutate(
+    ymin = exp(est - 1.96 * est_se),
+    ymax = exp(est + 1.96 * est_se)
+  ) %>% 
+    dplyr::select({{v}},est,ymin,ymax)
+  
+  if(exp_var) pr <- pr %>% mutate({{v}} := exp({{v}}))
+  
+  vquo <- enquo(v)
+  
+  fit.name <- deparse(substitute(modelobj))
+  var.name <- deparse(substitute(v))
+  
+  plot.out <- pr %>% 
+    ggplot(aes(!!vquo,exp(est),ymin=ymin,ymax=ymax))+
+    geom_ribbon(alpha=0.4)+geom_line()+
+    theme_minimal()+
+    labs(x=var.name,y="eDNA copies",title=paste("Fit:",fit.name))+
+    theme(panel.border = element_rect(color='black',fill=NA))
+  
+  if(saveplot){
+    plot.name <- paste(fit.name,var.name,"conditional effect.png")
+    ggsave(here('plots',plot.name),plot.out,h=6,w=6)
+  }
+  if(return_dat) return(pr)
+  else return(plot.out)
+}

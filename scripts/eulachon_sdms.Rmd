@@ -79,8 +79,8 @@ Load in our cleaned and joined eDNA data.
 d <- read_rds(here('data','qPCR',"eulachon qPCR 2019 and 2021 standards clean.rds")) %>% 
   mutate(Ct=replace_na(Ct,0))# delta-models in sdmTMB need this
 
-# field samples
-d_obs <- read_rds(here('data','qPCR','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
+# field samples (already joined to GLORYS data)
+d_obs <- read_rds(here('data','eDNA_glorys_matched.rds')) %>% 
   mutate(Ct=replace_na(Ct,0)) %>% # delta-models in sdmTMB need this
   mutate(utm.lon.km=utm.lon.m/1000,
          utm.lat.km=utm.lat.m/1000)
@@ -91,34 +91,9 @@ d_obs_filt <- d_obs %>% filter(depth_cat %in% c(0,50,150))
 d_obs_sf <- d_obs_filt %>% st_as_sf(coords=c('utm.lon.m','utm.lat.m'),crs=pred.crs)
 ```
 
-## Prediction Grid
-
-This is the 5km grid that we will use to project the models for mapping.
-
-```{r}
-## Prediction
-# MAKE GRID
-grid.pred <- read_rds(here('data','prediction_grid_5km_sdmTMB.rds')) %>% 
-  #make bottom depth positive
-  mutate(bathy.bottom.depth=-bathy.bottom.depth)
-
-# add depth categories
-grid.pred0 <- grid.pred %>% mutate(depth_cat=0)
-grid.pred50 <- grid.pred %>% filter(bathy.bottom.depth >= 50) %>% mutate(depth_cat=50)
-grid.pred150 <- grid.pred %>% filter(bathy.bottom.depth >= 100) %>% mutate(depth_cat=150)
-
-grid.predz <- bind_rows(grid.pred0,grid.pred50,grid.pred150) %>% 
-  mutate(depth_fct=as.factor(depth_cat))
-
-#background map
-coast <- ne_states(country='United States of America',returnclass = 'sf') %>% 
-  filter(name %in% c('California','Oregon','Washington','Nevada')) %>%
-  st_transform(crs = pred.crs)
-```
-
 ## Covariate data
 
-Bathymetry/bottom depth was already attached to the samples during pre-processing.
+Bathymetry/bottom depth was already attached to the samples during pre-processing. The field samples were also joined to modeled GLORYS data from their [Global Ocean Physics Reanalysis](https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/description). See script `match_GLORYS_temp_salinity.R`.
 
 ### Krill/Euphausiid data
 
@@ -134,43 +109,78 @@ rmarkdown::render(here::here('scripts','krill_nasc_matching.Rmd'),quiet=TRUE)
 edna_krill_metrics <- read_rds(here('model output','edna_krill_metrics.rds')) %>% 
   filter(depth_cat %in% c(0,50,150))
   
-d_obs_filt <- d_obs_filt %>% bind_cols(edna_krill_metrics %>% dplyr::select(k1:k5))
+d_obs_filt <- d_obs_filt %>% bind_cols(edna_krill_metrics %>% dplyr::select(k1:k6))
 ```
 
 ## Center Covariates
 
 ```{r}
 #center and scale covariates
+# d_obs_filt <- d_obs_filt %>% 
+#   # make bottom depth positive
+#   mutate(bathy.bottom.depth=-bathy.bottom.depth) %>% 
+#   # center and scale covariates
+#   mutate(across(c(so,thetao,bathy.bottom.depth,k1,k2,k3,k4,k5),list(norm=function(x) as.numeric(scale(x)))))
+```
+
+```{r}
+# normalized_vars_p <- d_obs_filt %>% 
+#   select(contains("norm")) %>% 
+#   pivot_longer(everything(),names_to="variable",values_to="val") %>% 
+#   ggplot(aes(val,fill=variable))+
+#   geom_density()+
+#   facet_wrap(~variable,scales='free')
+# normalized_vars_p
+
+```
+
+## Log Covariates
+
+Try natural logging covariates to scale them better for fitting
+
+```{r}
+#log covariates
 d_obs_filt <- d_obs_filt %>% 
   # make bottom depth positive
   mutate(bathy.bottom.depth=-bathy.bottom.depth) %>% 
-  # center and scale covariates
-  mutate(across(c(bathy.bottom.depth,k1,k2,k3,k4,k5),list(norm=function(x) as.numeric(scale(x)))))
+  # log covariates
+  mutate(across(c(so,thetao,bathy.bottom.depth,k1,k2,k3,k4,k5,k6),list(ln=function(x){
+    x[x==0]<-1
+    log(x)
+    })))
 ```
+
+```{r}
+logged_vars_p <- d_obs_filt %>% 
+  select(contains("_ln")) %>% 
+  pivot_longer(everything(),names_to="variable",values_to="val") %>% 
+  ggplot(aes(val,fill=variable))+
+  geom_density()+
+  facet_wrap(~variable,scales='free')
+logged_vars_p
+```
+
+## Other Transformations
+
+Here we add some other transformations of the above variables in case we want to try them in fitting
+
+```{r}
+d_obs_filt <- d_obs_filt %>% 
+  # squares
+  mutate(depth_ln2=bathy.bottom.depth_ln^2) %>% 
+  mutate(thetao_ln2=thetao_ln^2,
+         so_ln2=so_ln^2)
+```
+
+
 
 ## Designate Offsets
 
 While we are primarily interested in eulachon DNA concentration over space, time, and depth, we do not directly measure this concentration with our observations. Rather, we have replicate qPCR observations assocated with a water sample taken from a Niskin bottle and we have to account for the various modifications that have occurred during water sampling and processing. As part of this, we have a series of offsets that modify the true DNA concentration to affect what we observed in the qPCR. These [offsets](https://pbs-assess.github.io/sdmTMB/articles/model-description.html#offset-terms) will go into the model as log-transformed variables (because we will use a log link), and are scaling factors without estimated coefficients.
 
-We are primarily concerned with two offsets: one for the volume filtered out of each 2.5L Niskin bottle for each sample. Second, some samples were inhibited in PCR, and were diluted to eliminate this inhibition.
+We are primarily concerned with three offsets: one for the volume filtered out of each 2.5L Niskin bottle for each sample (`ln_vol_offset`). Second, some samples were inhibited in PCR, and were diluted to eliminate this inhibition (`ln_dil_offset`). Third, there was a wash error with some samples in 2019 that we correct for with a fixed effect.
 
-```{r}
-d_obs_filt <- d_obs_filt %>% 
-  # volume offset
-  mutate(ln_volume=log(volume),
-  # dilution/inhibition offset       
-         ln_dilution=log(dilution))
-
-# count up the distribution of these offsets
-d_obs_filt %>% 
-  count(volume,ln_volume)
-d_obs_filt %>% 
-  count(dilution,ln_dilution)
-
-# we can add the offsets together to create just one offset vectors since they are additive in log space
-d_obs_filt <- d_obs_filt %>% 
-  mutate(offset_vol_dil=ln_volume+ln_dilution)
-```
+Finally, we include an expansion factor of 20 to convert our estimates to the standard measure of eDNA copies/L. We derived this assuming a 2.5L water sample eluted in 100uL Longmire and 2 uL used in each PCR reaction. Therfore, each 2uL of sample corresponds to 2% (2uL of 100uL) of the total sample and therefore is equivalent to the copies DNA contained in 50mL of water. (0.02 x 2500 ml = 50 ml). So, multiplying by 20 gets us to copies/L.
 
 ## INLA Mesh
 
@@ -206,6 +216,7 @@ bound.outer = diff(range(st_coordinates(locs)[,1]))/3
 domain <-fmesher::fm_nonconvex_hull(locs,
                               concave = -0.025,
                               convex = -0.025)
+# I think we can use this to subset our prediction grid
 
 inla_mesh <- fmesher::fm_mesh_2d_inla(
   #loc=locs[,c("utm.lon","utm.lat")],
@@ -248,17 +259,39 @@ Intercepts options to try
 
 We will do this one at a time, increasing slowly in complexity.
 
+```{r}
+# source the plotting utilities
+source(here("scripts","plotting_utils.R"))
+```
+
 ## Common Spatial Field
+
+```{r}
+f0 <- sdmTMB(
+  Ct ~ 1+washed,
+  data = d_obs_filt,
+  mesh = mesh,
+  offset= "offsets_all",
+  spatial="on",
+  spatiotemporal = "off",
+  time=NULL,
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+f0
+make_pred_obs_plots(f0,d,model_name="Fit0")
+# AIC 13586.47
+```
 
 First, a model with just one common spatial field, and a single intercept.
 
 ```{r}
 tic("Fitting model: ")
 f1 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3),
+  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+s(so_ln,k=3)+washed,
   data = d_obs_filt,
-  mesh = mesh2,
-  offset= "offset_vol_dil",
+  mesh = mesh,
+  offset= "offsets_all",
   spatial="on",
   spatiotemporal = "off",
   time=NULL,
@@ -266,41 +299,75 @@ f1 <- sdmTMB(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-#AIC 13525.31
+f1
+#AIC 13454.97
+make_pred_obs_plots(f1,d,model_name="Fit1")
 ```
 
-One spatial field, random intercept by depth category
+One spatial field, random intercept by depth category. Salinity doesn't seem to work as a smooth, use a linear function instead.
 
 ```{r}
 tic("Fitting model: ")
 d_obs_filt$depth_cat <- factor(d_obs_filt$depth_cat)
 f2 <- sdmTMB(
-  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+(1|depth_cat),
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed+(1|depth_cat),
   data = d_obs_filt,
-  mesh = mesh2,
-  spatial="on",
-  family = stdcurve(),
-  control = sdmTMBcontrol(stdcurve_df = d)
-)
-toc()
-#AIC 13246.63
-```
-
-One spatial field, random intercept by year
-
-```{r}
-tic("Fitting model: ")
-d_obs_filt$yr_fct <- as.factor(d_obs_filt$year)
-f3 <- sdmTMB(
-  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|yr_fct),
-  data = d_obs_filt,
+  offset = 'offsets_all',
   mesh = mesh,
   spatial="on",
   family = stdcurve(),
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-#AIC 13310.52
+f2
+#AIC 13463.99
+make_pred_obs_plots(f2,d,model_name="Fit2")
+make_cond_plot(f2,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
+```
+
+One spatial field, random intercept by year.
+
+```{r}
+tic("Fitting model: ")
+d_obs_filt$yr_fct <- as.factor(d_obs_filt$year)
+f3 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed+(1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  offset= "offsets_all",
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+f3
+#AIC 13331.86
+make_pred_obs_plots(f3,d,model_name="Fit3")
+make_cond_plot(f3,thetao_ln,exp_var=T,saveplot=F)
+make_cond_plot(f3,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
+```
+
+Similar- one spatial field, s-t field by year instead of year intercept
+
+```{r}
+tic("Fitting model: ")
+f3.2 <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed,
+  data = d_obs_filt,
+  mesh = mesh,
+  offset= "offsets_all",
+  spatial="on",
+  spatiotemporal = "iid",
+  time="year",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+f3.2
+#AIC 13331.86
+make_pred_obs_plots(f3.2,d,model_name="Fit3.2")
+make_cond_plot(f3,thetao_ln,exp_var=T,saveplot=F)
+make_cond_plot(f3,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
 ```
 
 One spatial field, random intercept by year and depth category
@@ -308,15 +375,18 @@ One spatial field, random intercept by year and depth category
 ```{r}
 tic("Fitting model: ")
 f4 <- sdmTMB(
-  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat)+(1|yr_fct),
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed+(1|depth_cat)+(1|yr_fct),
   data = d_obs_filt,
   mesh = mesh,
+  offset= "offsets_all",
   spatial="on",
   family = stdcurve(),
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-#AIC 13214.31
+f4
+#AIC 13322.87
+make_pred_obs_plots(f4,d,model_name="Fit4")
 ```
 
 ## Spatial Field by Depth
@@ -329,14 +399,14 @@ d_obs_filt$d1 <- m[,1]
 d_obs_filt$d2 <- m[,2]
 d_obs_filt$d3 <- m[,3]
 ```
-
-
+ 
 ```{r}
 tic("Fitting model: ")
 f5 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3),
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed,
   data = d_obs_filt,
   mesh = mesh,
+  offset= "offsets_all",
   spatial_varying= ~d1+d2+d3,
   spatiotemporal="off",
   spatial="on",
@@ -344,8 +414,30 @@ f5 <- sdmTMB(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-#AIC 12001.99
-# lots of warnings- seems to have trouble partitioning between spatial and depth
+f5
+#AIC 11868.97
+# had difficulty partitioning between sigma_o (spatial field) and sigma_z (spatially varying coefficients)
+make_pred_obs_plots(f5,d,model_name="Fit5")
+```
+
+A version without bottom depth...
+
+```{r}
+tic("Fitting model: ")
+f5.2 <- sdmTMB(
+  Ct ~ 1+s(thetao_ln,k=3)+so_ln+washed,
+  data = d_obs_filt,
+  mesh = mesh,
+  offset= "offsets_all",
+  spatial_varying= ~d1+d2+d3,
+  spatiotemporal="off",
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+f5.2
+make_pred_obs_plots(f5.2,d,model_name="Fit5.2")
 ```
 
 Spatial field by depth category, random intercept by depth category. This one feels weird
@@ -353,9 +445,10 @@ Spatial field by depth category, random intercept by depth category. This one fe
 ```{r}
 tic("Fitting model: ")
 f6 <- sdmTMB(
-  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat),
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
+  offset= "offsets_all",
   spatial_varying= ~d1+d2+d3,
   spatiotemporal="off",
   spatial="on",
@@ -363,7 +456,10 @@ f6 <- sdmTMB(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-#AIC 12014.63; similar issues as f5 above
+f6
+# probably too many terms (see sanity(f))
+sanity(f6)
+make_pred_obs_plots(f6,d,model_name="Fit6")
 ```
 
 Spatial field by depth category, random intercept by year.
@@ -371,9 +467,10 @@ Spatial field by depth category, random intercept by year.
 ```{r}
 tic("Fitting model: ")
 f7 <- sdmTMB(
-  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|yr_fct),
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed+(1|yr_fct),
   data = d_obs_filt,
   mesh = mesh,
+  offset= "offsets_all",
   spatial_varying= ~d1+d2+d3,
   spatiotemporal="off",
   spatial="on",
@@ -381,17 +478,42 @@ f7 <- sdmTMB(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-#AIC 11932.48, similar issues as the two previous models
+f7
+make_pred_obs_plots(f7,d,model_name="Fit7")
 ```
+
+A version of the above turning the basic spatial field off (because of the depth fields), and removing bottom depth as a predictor
+
+```{r}
+tic("Fitting model: ")
+f7.2 <- sdmTMB(
+  Ct ~ 0+s(thetao_ln,k=3)+so_ln+washed+(1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  offset= "offsets_all",
+  spatial_varying= ~d1+d2+d3,
+  spatiotemporal="off",
+  spatial="off",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+f7.2
+make_pred_obs_plots(f7.2,d,model_name="Fit7.2")
+# this one ran fine
+```
+
+**MODELS BELOW HERE DON'T WORK WELL RIGHT NOW*
 
 Spatial field by depth category, random intercept by depth and year
 
 ```{r}
 tic("Fitting model: ")
 f8 <- sdmTMB(
-  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat)+(1|yr_fct),
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(k2_ln,k=3)+poly(thetao_ln,2)+poly(so_ln,2)+washed+(1|depth_cat)+(1|yr_fct),
   data = d_obs_filt,
   mesh = mesh,
+  offset= "offsets_all",
   spatial_varying= ~d1+d2+d3,
   spatiotemporal="off",
   spatial="on",
@@ -399,7 +521,9 @@ f8 <- sdmTMB(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-# AIC 11932.79, but same issues as above
+f8
+# DID NOT RUN
+# make_pred_obs_plots(f8,d,model_name="Fit8")
 ```
 
 ## Spatial Field by Year
@@ -409,9 +533,10 @@ Spatial field by year, single intercept.
 ```{r}
 tic("Fitting model: ")
 f9 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3),
+  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(k2_ln,k=3)+poly(thetao_ln,2)+poly(so_ln,2)+washed,
   data = d_obs_filt,
   mesh = mesh,
+  offset= "offsets_all",
   time="year",
   spatiotemporal="IID",
   spatial="on",
@@ -419,7 +544,9 @@ f9 <- sdmTMB(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-#AIC 
+f9
+# DID NOT APPROPRIATELY CONVERGE- HAVING TROUBLE WITH SPATIAL SD
+make_pred_obs_plots(f9,d,model_name="Fit9")
 ```
 
 Spatial field by year, random intercept by depth category.
@@ -427,9 +554,9 @@ Spatial field by year, random intercept by depth category.
 ```{r}
 tic("Fitting model: ")
 f10 <- sdmTMB(
-  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat),
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(k2_ln,k=3)+poly(thetao_ln,2)+poly(so_ln,2)+washed+(1|depth_cat),
   data = d_obs_filt,
-  mesh = mesh,
+  mesh = mesh2,
   time="year",
   spatiotemporal="IID",
   spatial="on",
@@ -437,7 +564,10 @@ f10 <- sdmTMB(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
+f10
 #AIC 
+# worked a little better, but spatial SD very small
+make_pred_obs_plots(f10,d,model_name="Fit10")
 ```
 
 Spatial field by year, random intercept by year.
@@ -445,9 +575,9 @@ Spatial field by year, random intercept by year.
 ```{r}
 tic("Fitting model: ")
 f11 <- sdmTMB(
-  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|yr_fct),
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(k2_ln,k=3)+poly(thetao_ln,2)+poly(so_ln,2)+washed+(1|yr_fct),
   data = d_obs_filt,
-  mesh = mesh,
+  mesh = mesh2,
   time="year",
   spatiotemporal="IID",
   spatial="on",
@@ -455,6 +585,7 @@ f11 <- sdmTMB(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
+f11 # similar issues as above
 #AIC 
 ```
 
@@ -463,9 +594,9 @@ Spatial field by year, random intercept by depth and year
 ```{r}
 tic("Fitting model: ")
 f12 <- sdmTMB(
-  Ct ~ 0+s(bathy.bottom.depth_norm,k=3)+s(k5_norm,k=3)+ (1|depth_cat)+(1|yr_fct),
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(k2_ln,k=3)+poly(thetao_ln,2)+poly(so_ln,2)+washed+(1|depth_cat)+(1|yr_fct),
   data = d_obs_filt,
-  mesh = mesh,
+  mesh = mesh2,
   time="year",
   spatiotemporal="IID",
   spatial="on",
@@ -473,66 +604,407 @@ f12 <- sdmTMB(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
+f12 # same issues as above
 ```
 
 Where we're at so far: models 1 through 4 converged with no issues, and relatively quickly. Models 5-8 seemingly had difficulty apportioning variance between the basic spatial field and the spatially varying coefficients for depth. They converged, but with significant warnings (see,e.g., `sanity(f8)`). Models 9-12 did not appropriately converge.
 
 # Conditional Effects
 
-We can look at the estimated effects of bottom depth and krill on our estimates of eulachon eDNA, conditional on all other variable being held at their means. For now, we use models 1-4 for this.
+We can look at the estimated effects of bottom depth, temperature, salinity and krill on our estimates of eulachon eDNA, conditional on all other variable being held at their means. For now, we use a range of models that converged, and whose diagnostic plots above (e.g. standard curve fits) look reasonable.
 
 ## Bottom Depth
 
 ```{r}
-depth.cond <- purrr::map2_df(list(f1,f2,f3,f4),c("f1","f2","f3","f4"),function(m,n){
-  depths <- tibble(
-    bathy.bottom.depth_norm= seq(min(d_obs_filt$bathy.bottom.depth_norm),max(d_obs_filt$bathy.bottom.depth_norm),length.out=100),
-    year=2019, yr_fct=as.factor(2019),depth_cat=as.factor(50),
-    k5_norm=mean(d_obs_filt$k5_norm))
-  pr <- predict(m,newdata=depths,se_fit=TRUE,re_form=NA)
+depth.cond <- purrr::map2_df(list(f2,f3,f4,f5,f7.2),c("f2","f3","f4","f5","f7.2"),function(m,n){
+  pr <- make_cond_plot(m,bathy.bottom.depth_ln,exp_var = T,return_dat=T,saveplot = F)
   pr %>% mutate(model=n)
 })
 
-depth.cond.p <- depth.cond %>%  
-  mutate(bathy.bottom.depth=bathy.bottom.depth_norm*sd(d_obs_filt$bathy.bottom.depth)+mean(d_obs_filt$bathy.bottom.depth)) %>% 
-  ggplot(aes(bathy.bottom.depth, exp(est),
-  ymin = exp(est - 1.96 * est_se),
-  ymax = exp(est + 1.96 * est_se),
+depth.cond.p <- depth.cond %>%   
+  ggplot(aes(bathy.bottom.depth_ln, exp(est),ymin=ymin,ymax=ymax,
   fill=model
 )) +
   geom_line() +
   geom_ribbon(alpha = 0.4) +
-  scale_x_continuous() +
+  scale_x_continuous(limits=c(0,800)) +
   coord_cartesian(expand = F) +
-  labs(x = "Depth (m)", y = "eDNA conc.")
+  facet_wrap(~model)+
+  labs(x = "Bottom Depth (m)", y = "eDNA conc.",title="Conditional Effect of Bottom Depth")
 depth.cond.p
 ```
 
-## Krill
+## Temperature
 
 ```{r}
-krill.cond <- purrr::map2_df(list(f1,f2,f3,f4),c("f1","f2","f3","f4"),function(m,n){
-  depths <- tibble(
-    bathy.bottom.depth_norm= mean(d_obs_filt$bathy.bottom.depth_norm),
-    year=2019, yr_fct=as.factor(2019),depth_cat=as.factor(50),
-    k5_norm=seq(min(d_obs_filt$k5_norm),max(d_obs_filt$k5_norm),length.out=100))
-  pr <- predict(m,newdata=depths,se_fit=TRUE,re_form=NA)
+thetao.cond <- purrr::map2_df(list(f2,f3,f4,f5,f7.2),c("f2","f3","f4","f5","f7.2"),function(m,n){
+  pr <- make_cond_plot(m,thetao_ln,exp_var = T,return_dat=T,saveplot = F)
   pr %>% mutate(model=n)
 })
 
-krill.cond.p <- krill.cond %>%  
-  mutate(k5=k5_norm*sd(d_obs_filt$k5)+mean(d_obs_filt$k5)) %>% 
-  ggplot(aes(k5, exp(est),
-  ymin = exp(est - 1.96 * est_se),
-  ymax = exp(est + 1.96 * est_se),
+thetao.cond.p <- thetao.cond %>%   
+  ggplot(aes(thetao_ln, exp(est),ymin=ymin,ymax=ymax,
   fill=model
 )) +
   geom_line() +
   geom_ribbon(alpha = 0.4) +
-  scale_x_continuous() +
   coord_cartesian(expand = F) +
-  labs(x = "Normalized Krill", y = "eDNA conc.")
-krill.cond.p
-```
+  facet_wrap(~model)+
+  labs(x = "Temperature (C)", y = "eDNA conc.",title="Conditional Effect of Temperature")
+thetao.cond.p
 ```
 
+## Salinity
+
+This one isn't that exciting/informative: consider removing salinity?
+
+```{r}
+so.cond <- purrr::map2_df(list(f2,f3,f4,f5,f7.2),c("f2","f3","f4","f5","f7.2"),function(m,n){
+  pr <- make_cond_plot(m,so_ln,exp_var = T,return_dat=T,saveplot = F)
+  pr %>% mutate(model=n)
+})
+
+so.cond.p <- so.cond %>%   
+  ggplot(aes(so_ln, exp(est),ymin=ymin,ymax=ymax,
+  fill=model
+)) +
+  geom_line() +
+  geom_ribbon(alpha = 0.4) +
+  coord_cartesian(expand = F) +
+  facet_wrap(~model)+
+  labs(x = "Salinity (psu)", y = "eDNA conc.",title="Conditional Effect of Salinity")+
+  theme_minimal()
+so.cond.p
+```
+
+# Make Maps
+
+We can make maps of predicted eulachon eDNA with these models.
+
+```{r}
+# if we want to zoom in on particular regions
+gpsf <- grid.pred %>% st_as_sf(coords=c('x','y'),crs=pred.crs,remove=F)
+
+# Oregon
+orbbox <- coastcrop %>% filter(name=="Oregon") %>% st_bbox() %>% .[c(2,4)]
+orbbox <- gpsf %>% filter(y>orbbox['ymin'],y<orbbox['ymax']) %>% st_bbox()
+
+# Washington
+wabbox <- coastcrop %>% filter(name=="Washington") %>% st_bbox()%>% .[c(2,4)]
+wabbox <- gpsf %>% filter(y>wabbox['ymin'],y<wabbox['ymax']) %>% st_bbox()
+
+# california
+cabbox <- coastcrop %>% filter(name=="California") %>% st_bbox()%>% .[c(2,4)]
+cabbox <- gpsf %>% filter(y>cabbox['ymin'],y<cabbox['ymax']) %>% st_bbox()
+```
+
+## Fit 3
+
+Try this with Fit 3, which was one of the better-looking models: 
+
+```{r,fig.height=8,fig.width=8}
+f3.preds <- predict(f3,newdata=grid.pred) %>% 
+  mutate(expest=exp(est))
+
+make_map(f3.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 3",fill="ln(eDNA)")
+make_map(f3.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 3",fill="ln(eDNA)")
+
+make_map(f3.preds,est_non_rf)+ #tidy(f3,'fixed')
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 3: Fixed Effects Only",fill="ln(eDNA)")
+
+make_map(f3.preds,est_rf)+ #tidy(f3,'ran_pars')
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 3: Random Effects Only",fill="ln(eDNA)")
+
+make_map_bathy(f3.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 3",fill="ln(eDNA)")
+make_map_bathy(f3.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 3",fill="ln(eDNA)")+
+  ylim(orbbox[c(2,4)])+xlim(orbbox[c(1,3)])
+make_map_bathy(f3.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 3",fill="ln(eDNA)")+
+  ylim(wabbox[c(2,4)])+xlim(wabbox[c(1,3)])
+make_map_bathy(f3.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 3",fill="ln(eDNA)")+
+  ylim(cabbox[c(2,4)])+xlim(cabbox[c(1,3)])
+
+# quantiles?
+f3.preds %>% 
+  arrange(est) %>% 
+  mutate(quantest=ntile(est,100)) %>% 
+  mutate(quantcut=cut(quantest,10)) %>% 
+  mutate(top5=ifelse(quantest>=95,T,F)) %>% 
+  make_map(top5)+
+  scale_fill_manual(values=c('gray20','#BD3786FF'))+
+  # scale_fill_viridis_c()+
+    # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
+  labs(title="Fit 3",fill="Top 5% (eDNA)")
+
+f3.preds %>% 
+  arrange(est) %>% 
+  mutate(quantest=ntile(est,100)) %>% 
+  mutate(quantcut=cut(quantest,10)) %>% 
+  make_map(quantcut)+
+  scale_fill_viridis(option='C',discrete=T)+
+    # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
+  labs(title="Fit 3",fill="Quantile (eDNA)")
+```
+## Fit 4
+
+Try this with Fit 4, which was one of the better-looking models: 
+
+```{r,fig.height=8,fig.width=8}
+f4.preds <- predict(f4,newdata=grid.pred)
+
+make_map(f4.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 4",fill="ln(eDNA)")
+
+# f5.preds <- predict(f4,newdata=grid.pred %>% 
+#                       mutate(d1=ifelse(depth_cat==0,1,0),
+#                              d2=ifelse(depth_cat==50,1,0),
+#                              d3=ifelse(depth_cat==150,1,0)))
+make_map_bathy(f4.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 4",fill="ln(eDNA)")
+make_map_bathy(f4.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 4",fill="ln(eDNA)")+
+  ylim(orbbox[c(2,4)])+xlim(orbbox[c(1,3)])
+make_map_bathy(f4.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 4",fill="ln(eDNA)")+
+  ylim(wabbox[c(2,4)])+xlim(wabbox[c(1,3)])
+make_map_bathy(f4.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 4",fill="ln(eDNA)")+
+  ylim(cabbox[c(2,4)])+xlim(cabbox[c(1,3)])
+# probability of presence
+pa <-make_presence_absence_map(f4)
+pa[[1]]
+pa[[2]]
+
+# quantiles?
+f4.preds %>% 
+  arrange(est) %>% 
+  mutate(quantest=ntile(est,100)) %>% 
+  mutate(top5=ifelse(quantest>=95,T,F)) %>% 
+  make_map(top5)+
+  scale_fill_manual(values=c('gray20','#BD3786FF'))+
+  # scale_fill_viridis_c()+
+    # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
+  labs(title="Fit 4",fill="Top 5% (eDNA)")
+```
+## Fit 5
+
+Try this with Fit 5, which was one of the better-looking models: 
+
+```{r,fig.height=8,fig.width=8}
+f5.preds <- predict(f5,newdata=grid.pred)
+
+make_map(f5.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 5",fill="ln(eDNA)")
+
+make_map_bathy(f5.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 5",fill="ln(eDNA)")
+make_map_bathy(f5.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 5",fill="ln(eDNA)")+
+  ylim(orbbox[c(2,4)])+xlim(orbbox[c(1,3)])
+make_map_bathy(f5.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 5",fill="ln(eDNA)")+
+  ylim(wabbox[c(2,4)])+xlim(wabbox[c(1,3)])
+make_map_bathy(f5.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 5",fill="ln(eDNA)")+
+  ylim(cabbox[c(2,4)])+xlim(cabbox[c(1,3)])
+# probability of presence
+pa <-make_presence_absence_map(f5)
+pa[[1]]
+pa[[2]]
+
+# quantiles?
+f5.preds %>% 
+  arrange(est) %>% 
+  mutate(quantest=ntile(est,100)) %>% 
+  mutate(top5=ifelse(quantest>=95,T,F)) %>% 
+  make_map(top5)+
+  scale_fill_manual(values=c('gray20','#BD3786FF'))+
+  # scale_fill_viridis_c()+
+    # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
+  labs(title="Fit 5",fill="Top 5% (eDNA)")
+```
+
+## Fit 7.2
+
+Try this with Fit 7.2, which was one of the better-looking models: 
+
+```{r,fig.height=8,fig.width=8}
+f7.2.preds <- predict(f7.2,newdata=grid.pred)
+
+make_map(f7.2.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 7.2",fill="ln(eDNA)")
+
+# f5.preds <- predict(f7.2,newdata=grid.pred %>% 
+#                       mutate(d1=ifelse(depth_cat==0,1,0),
+#                              d2=ifelse(depth_cat==50,1,0),
+#                              d3=ifelse(depth_cat==150,1,0)))
+make_map_bathy(f7.2.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 7.2",fill="ln(eDNA)")
+make_map_bathy(f7.2.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 7.2",fill="ln(eDNA)")+
+  ylim(orbbox[c(2,4)])+xlim(orbbox[c(1,3)])
+make_map_bathy(f7.2.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 7.2",fill="ln(eDNA)")+
+  ylim(wabbox[c(2,4)])+xlim(wabbox[c(1,3)])
+make_map_bathy(f7.2.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 7.2",fill="ln(eDNA)")+
+  ylim(cabbox[c(2,4)])+xlim(cabbox[c(1,3)])
+
+# quantiles?
+f7.2.preds %>% 
+  arrange(est) %>% 
+  mutate(quantest=ntile(est,100)) %>% 
+  mutate(top5=ifelse(quantest>=95,T,F)) %>% 
+  make_map(top5)+
+  scale_fill_manual(values=c('gray20','#BD3786FF'))+
+  # scale_fill_viridis_c()+
+    # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
+  labs(title="Fit 7.2",fill="Top 5% (eDNA)")
+```
+# Scratch
+
+```{r,fig.height=8,fig.width=8}
+test <- predict(f5,newdata=grid.pred %>% 
+                      mutate(d1=ifelse(depth_cat==0,1,0),
+                             d2=ifelse(depth_cat==50,1,0),
+                             d3=ifelse(depth_cat==150,1,0)))
+
+# maps of SVCs by depth
+make_map(test %>% filter(depth_cat==0,year==2019),zeta_s_d1)+
+  scale_fill_viridis(option="C")+
+  ggtitle("Spatial Factor: Surface")
+
+make_map(test %>% filter(depth_cat==0,year==2019),zeta_s_d2)+
+  scale_fill_viridis(option="C")+ggtitle("Spatial Factor: 50m Depth")
+
+make_map(test %>% filter(depth_cat==0,year==2019),zeta_s_d3)+
+  scale_fill_viridis(option="C")+ggtitle("Spatial Factor: 150m Depth")
+
+# maps of all spatial random effects (omega_s)
+make_map(test %>% filter(depth_cat==0,year==2019),omega_s)+
+  scale_fill_viridis(option="C")+
+  ggtitle("Spatial Random Effects")
+
+# fixed effects only
+make_map(test,est_non_rf)+
+  scale_fill_viridis(option="C")+
+  ggtitle("Prediction: Fixed Effects Only")
+
+# random effects only prediction
+make_map(test,est_rf)+
+  scale_fill_viridis(option="C")+
+  ggtitle("Prediction: Random Effects Only")
+```
+
+## Trying sdmTMB_cv
+
+Model comparison
+
+```{r}
+clust <-sample(seq_len(3), size = nrow(d_obs_filt), replace = TRUE)
+f3cv <- sdmTMB_cv(
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed+(1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  offset= "offsets_all",
+  spatial="on",
+  fold_ids=clust,
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+
+f4cv <- sdmTMB_cv(
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed+(1|depth_cat)+(1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  offset= "offsets_all",
+  spatial="on",
+  fold_ids=clust,
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+
+f5cv <- sdmTMB_cv(
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed,
+  data = d_obs_filt,
+  mesh = mesh,
+  offset= "offsets_all",
+  spatial_varying= ~d1+d2+d3,
+  spatiotemporal="off",
+  spatial="on",
+  fold_ids=clust,
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+
+f3cv$sum_loglik
+f4cv$sum_loglik
+f5cv$sum_loglik
+# higher is better
+# in this case, Fit 3 seems to have the greatest support with likelihood
+```
+
+## Other Formulas
+
+```{r}
+d_obs_filt_test <- d_obs_filt %>% 
+  mutate(bottomT_ln=log(bottomT))
+ft <- sdmTMB_cv(
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+uo+vo+so_ln+s(bottomT_ln,k=3)+washed+(1|yr_fct),
+  data = d_obs_filt_test,
+  mesh = mesh,
+  offset= "offsets_all",
+  spatial="on",
+  fold_ids=clust,
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+ft$sum_loglik
+m1 <- ft$models[[1]]
+
+make_pred_obs_plots(ft$models[[1]],d,saveplots = F)
+# make_cond_plot(ft,hour,saveplot = F)
+make_cond_plot(m1,bathy.bottom.depth_ln,exp_var=T,saveplot = F)+xlim(0,500)
+make_cond_plot(m1,thetao_ln,exp_var=T,saveplot = F)
+make_cond_plot(m1,so_ln,exp_var=T,saveplot = F)
+make_cond_plot(m1,vo,exp_var=F,saveplot = F)
+make_cond_plot(m1,uo,exp_var=F,saveplot = F)
+
+make_cond_plot(m1,bottomT_ln,exp_var=T,saveplot = F)
+# without so_ln: -4209.852
+# with uo, vo, and so_ln: sumloglik=-4195.278
+# with just uo and so_ln: -4195.992
+# with just uo and s(so_ln,k=3): -4219.442
+# with s() for uo,vo,and so: -4279.387
+# adding krill seems to make the likelihood decrease
+
+# with log(bottom temperature), uo,vo, and so, but NOT thetao: -4273.88
+```

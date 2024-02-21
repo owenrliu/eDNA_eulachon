@@ -332,7 +332,7 @@ dat.noID <- dat.samp %>% filter(is.na(station))
 
 #
 dat.samp <- dat.samp %>% 
-  dplyr::select(date,time,lat,lon,year,month,day,transect,qPCR,well,sample,IPC_Ct,inhibition_rate,dilution,task,Zymo,Ct,copies_ul,depth,depth_cat,station,Niskin,volume,bathy.bottom.depth,utm.lon.m,utm.lat.m,transect_dist_m)
+  dplyr::select(date,time,lat,lon,year,month,day,transect,qPCR,well,sample,IPC_Ct,inhibition_rate,drop.sample, dilution,task,Zymo,Ct,copies_ul,depth,depth_cat,station,Niskin,volume,bathy.bottom.depth,utm.lon.m,utm.lat.m,transect_dist_m)
 ```
 
 ## Save

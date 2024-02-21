@@ -407,17 +407,6 @@ edna_krill_metrics <- edna_krill_metrics %>%
   unnest(cols=c(data))
 ```
 
-## Save 
-
-```{r,eval=F}
-write_rds(edna_krill_metrics,here('model output','edna_krill_metrics.rds'))
-```
-
-```{r}
-# if you need to read (i.e., you don't need or want to re-run the slow step above)
-edna_krill_metrics <- read_rds(here('model output','edna_krill_metrics.rds'))
-```
-
 # Krill SDM
 
 Another option is to "smooth" the krill data using an SDM. This is a little odd, since we want the krill data to feed into an SDM for **eulachon**, but nevertheless, let's calculate it and see what it looks like. We will fit a simple model in sdmTMB with only spatial and spatial-temporal latent factors (i.e., no environmental covariates), then project onto a fine-scale grid. We can also project the model at the exact locations of the eDNA data, thereby adding the model-smoothed krill densities as yet another option for a metric.
@@ -477,9 +466,9 @@ qqline(kfit_resids)
 We can project this krill model onto a spatial grid and map it.
 
 ```{r}
-grid.pred <- read_rds(here('Data','prediction_grid_5km_sdmTMB.rds')) %>% 
+grid.pred <- read_rds(here('Data','prediction_grid_5km_sdmTMB_no_covars.rds')) %>% 
   rename(xkm=utm.lon.km,ykm=utm.lat.km) %>% 
-  filter(bathy.bottom.depth>-500) %>% 
+  # filter(bathy.bottom.depth>-500) %>% 
   mutate(Year=2019) %>% 
   replicate_df(time_name="Year",time_values=c(2019,2021,2023))
 
@@ -575,6 +564,23 @@ edna_krill_metrics$k6 <- exp(kfit.preds.eul.pts$est)
 # edna_krill_metrics$k6 <- d_obs_kfit_join$k6
 ```
 
+## Save 
+
+```{r,eval=F}
+# matched to samples
+write_rds(edna_krill_metrics,here('model output','edna_krill_metrics.rds'))
+
+# matched to prediction grid
+kfit.preds.out <- kfit.preds %>% 
+  filter(Year %in% c(2019,2021)) %>% 
+  dplyr::select(x:bathy.bottom.depth,k6_ln=est,year=Year)
+write_rds(kfit.preds.out,here('model output','krill_sdm_matched_to_pred_grid.rds'))
+```
+
+```{r}
+# if you need to read (i.e., you don't need or want to re-run the slow step above)
+edna_krill_metrics <- read_rds(here('model output','edna_krill_metrics.rds'))
+```
 
 # Correlation
 

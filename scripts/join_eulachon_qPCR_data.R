@@ -1,5 +1,5 @@
 # JOIN MULTIPLE YEARS OF PROCESSED QPCR DATA, INCLUDING UNKNOWN (FIELD) SAMPLES, STANDARDS
-# right now, for eulachon
+# ALSO DO SOME CALCULATIONS OF IMPORTANT OFFSETS AND KEEP TRACK OF WHAT GETS FILTERED OUT
 
 library(tidyverse)
 library(here)
@@ -25,7 +25,7 @@ stations_depths_count_2019 <- dat19 %>% count(station,depth_cat) # there should 
 
 dat19_thin <- dat19 %>%
   filter(is.na(Zymo)) %>% 
-  dplyr::select(date,year,month,day,time,station,lat,lon,utm.lon.m,utm.lat.m,qPCR,inhibition_rate,dilution,volume,Ct,copies_ul,depth_cat,bathy.bottom.depth,transect_dist_m)
+  dplyr::select(date,year,month,day,time,station,lat,lon,utm.lon.m,utm.lat.m,qPCR,inhibition_rate,drop.sample,dilution,volume,Ct,copies_ul,depth_cat,bathy.bottom.depth,transect_dist_m)
 # how many samples are diluted?
 dat19_thin %>% count(dilution)
 
@@ -35,7 +35,7 @@ glimpse(dat21)
 dat21 %>% count(depth_cat)
 stations_depths_count_2021 <- dat21 %>% count(station,depth_cat)
 dat21_thin <- dat21 %>% 
-  dplyr::select(date,year,month,day,time,station,lat,lon,utm.lon.m,utm.lat.m,qPCR,inhibition_rate,dilution,volume,Ct,copies_ul,depth_cat,bathy.bottom.depth,transect_dist_m) %>% 
+  dplyr::select(date,year,month,day,time,station,lat,lon,utm.lon.m,utm.lat.m,qPCR,inhibition_rate,drop.sample,dilution,volume,Ct,copies_ul,depth_cat,bathy.bottom.depth,transect_dist_m) %>% 
   mutate(inhibition_rate=as.numeric(inhibition_rate),
          volume=as.numeric(volume))
 
@@ -91,12 +91,6 @@ datjoin <- datjoin %>% filter(!is.na(volume))
 
 stations_depths_count_all_filt<- datjoin %>% count(year,station,depth_cat)
 
-# Set some final variable names
-datjoin_final <- datjoin %>% 
-  rename(plate=qPCR) %>% 
-  mutate(Ct=na_if(Ct,-99)) %>% 
-  dplyr::select(-inhibition_rate)
-
 # Thin, clean, bind standards data
 stand19_thin <- stand19 %>% 
   dplyr::select(qPCR,Ct,known_conc_ul=copies_ul) %>% 
@@ -110,6 +104,81 @@ standjoin <- stand19_thin %>%
   mutate(Ct=na_if(Ct,-99))
 glimpse(standjoin)
 
+#### OFFSETS AND CORRECTIONS ####
+
+# ADD CORRECTION FOR 2uL ADDITION INSTEAD OF 1
+standjoin <- standjoin %>% mutate(known_conc_ul = known_conc_ul*2)
+
+# ADD OFFSETS FOR DILUTION AND VOLUME FOR UNKNOWN SAMPLES
+datjoin <- datjoin %>% 
+  # volume offset
+  mutate(ln_vol_offset=log(volume/2.5),
+         # dilution/inhibition offset       
+         ln_dil_offset=log(dilution))
+# expansion factor to copies/L
+datjoin <- datjoin %>% 
+  mutate(ln_expand_offset=log(1/20))
+
+# we can add the offsets together to create just one offset vectors since they are additive in log space
+datjoin <- datjoin %>% 
+  mutate(offsets_all=ln_vol_offset+ln_dil_offset+ln_expand_offset)
+  
+# for the 2019 wash error
+# find samples that were washed, then find their pairs
+datjoin <- datjoin %>% 
+  mutate(washed=ifelse(drop.sample %in% c("30EtOH","30EtOHpaired"),1,0))
+# dat.wash <- datjoin %>% 
+#   filter(drop.sample %in% c("30EtOH","30EtOHpaired")) %>% 
+#   mutate(washed="washed")
+# stations.washed <- dat.wash %>% distinct(year,station,depth_cat)
+# washed.pairs <- datjoin %>% 
+#   filter(year%in%stations.washed$year,station %in% stations.washed$station,depth_cat%in%stations.washed$depth_cat) %>% 
+#   filter(!drop.sample %in% c("30EtOH","30EtOHpaired")) %>% 
+#   mutate(washed="unwashed")
+# dat.wash.all <- bind_rows(dat.wash,washed.pairs)
+
+# find unique depth-station combinations among these stations.
+# dat.wash$station <- as.factor(dat.wash$station)
+# uni.wash <- dat.wash %>% group_by(station,depth_cat,drop.sample) %>%
+#   summarise(N=length(station)) %>% mutate(status="washed") %>% ungroup()
+# #
+# pairs.wash <- datjoin %>% filter(!drop.sample %in% c("30EtOH","30EtOHpaired"))
+# pairs.wash <- uni.wash %>% dplyr::select(station,depth_cat) %>% left_join(.,pairs.wash) %>%
+#   mutate(status="unwashed")
+# #
+# dat.wash <- dat.wash %>% mutate(status="washed")
+#
+# dat.wash.all <- bind_rows(dat.wash,pairs.wash) %>% arrange(station,depth_cat)
+#
+#
+# # add indicator for membership in 30EtOH club and associated pairs
+# # 0 = normal sample. 1 = washed with 30% etoh. 2= pair of washed with 30% EtOH sample
+# dat.wash.all <- dat.wash.all %>% mutate(wash.indicator = ifelse(status == "washed",1,2)) %>%
+#   dplyr::select(-status)
+# # # This indicator variable gets used in the STAN code.
+# dat.wash.all <- dat.wash.all %>% mutate(wash_idx = ifelse(wash.indicator==1,1,0))
+# 
+# # find samples that were washed with 30% EtOH, exclude them from dat.samp,
+# # then add them back in with needed indicator variables
+# exclude  <- unique(dat.wash.all$sample)
+# dat.samp <- dat.samp %>% mutate(wash.indicator=0,wash_idx=0) %>% filter(!sample %in% exclude) %>%
+#   bind_rows(.,dat.wash.all)
+
+# count up the distribution of these offsets
+datjoin %>% 
+  count(volume,ln_vol_offset)
+datjoin %>% 
+  count(dilution,ln_dil_offset)
+datjoin %>% 
+  count(washed)
+
+# Set some final variable names
+datjoin_final <- datjoin %>% 
+  rename(plate=qPCR) %>% 
+  mutate(Ct=na_if(Ct,-99)) %>% 
+  dplyr::select(-inhibition_rate)
+
+#### vISUALIZE ####
 # some quick visualizations
 plot_theme <- theme_minimal()+theme(panel.border = element_rect(color='black',fill=NA))
 theme_set(plot_theme)
