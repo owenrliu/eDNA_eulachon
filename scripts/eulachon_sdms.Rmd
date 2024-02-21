@@ -302,6 +302,7 @@ toc()
 f1
 #AIC 13454.97
 make_pred_obs_plots(f1,d,model_name="Fit1")
+make_cond_plot(f1,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
 ```
 
 One spatial field, random intercept by depth category. Salinity doesn't seem to work as a smooth, use a linear function instead.
