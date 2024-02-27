@@ -186,6 +186,36 @@ Finally, we include an expansion factor of 20 to convert our estimates to the st
 
 Create the mesh that will be the basis of our estimation---based on the spatial distribution of our sample data, the mesh is created in order to facilitate efficient processing and estimatino of the model in sdmTMB. Instead of calculating enormous covariance matrices in model fitting, we can drastically reduce computation time by using the mesh.
 
+NOTE: SEE THE BOTTOM OF THIS SCRIPT FOR SOME DIAGNOSTICS ON MESH COMPLEXITY
+
+```{r}
+
+locs <- d_obs_filt %>%
+  distinct(year,station,utm.lon.km,utm.lat.km) %>%
+  st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
+
+max.edge = diff(range(st_coordinates(locs)[,1]))/6
+bound.outer = diff(range(st_coordinates(locs)[,1]))/3
+
+domain <-fmesher::fm_nonconvex_hull(locs,
+                              concave = -0.025,
+                              convex = -0.025)
+# I think we can use this to subset our prediction grid
+
+inla_mesh <- fmesher::fm_mesh_2d_inla(
+  #loc=locs[,c("utm.lon","utm.lat")],
+  loc.domain = domain, # coordinates
+  boundary=domain,
+  max.edge = c(max.edge,max.edge*10), # max triangle edge length; inner and outer meshes
+  offset = c(max.edge, bound.outer),  # inner and outer border widths
+  #max.n.strict=100,#,
+  # min.angle=20,
+  cutoff = max.edge/2 # minimum triangle edge length
+)
+
+mesh <- make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"),n_knots=100,mesh=inla_mesh) # this was decided based on a cross-validation exercise (see "Test Mesh Complexity" below)
+```
+
 ```{r}
 # as of 2/13/24, these were the mesh options setup that Ole is using for hake
 # locs <- d_obs_filt %>%
@@ -206,35 +236,14 @@ Create the mesh that will be the basis of our estimation---based on the spatial 
 #   min.angle=20
 # )
 
-locs <- d_obs_filt %>%
-  distinct(year,station,utm.lon.km,utm.lat.km) %>% 
-  st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
 
-max.edge = diff(range(st_coordinates(locs)[,1]))/5
-bound.outer = diff(range(st_coordinates(locs)[,1]))/3
-
-domain <-fmesher::fm_nonconvex_hull(locs,
-                              concave = -0.025,
-                              convex = -0.025)
-# I think we can use this to subset our prediction grid
-
-inla_mesh <- fmesher::fm_mesh_2d_inla(
-  #loc=locs[,c("utm.lon","utm.lat")],
-  loc.domain = domain, # coordinates
-  boundary=domain,
-  max.edge = c(max.edge,max.edge*10), # max triangle edge length; inner and outer meshes
-  offset = c(max.edge, bound.outer),  # inner and outer border widths
-  #max.n.strict=100,#,
-  # min.angle=20,
-  cutoff = max.edge/2 # minimum triangle edge length
-)
-
-mesh <- make_mesh(d_obs_filt, c("utm.lon.km", "utm.lat.km"), mesh = inla_mesh)
-mesh2 <- make_mesh(d_obs_filt, c("utm.lon.km", "utm.lat.km"), cutoff=20)
-mesh$mesh$n
-mesh2$mesh$n
-plot(mesh)
-plot(mesh2)
+# 
+# mesh <- make_mesh(d_obs_filt, c("utm.lon.km", "utm.lat.km"), mesh = inla_mesh)
+# mesh2 <- make_mesh(d_obs_filt, c("utm.lon.km", "utm.lat.km"), cutoff=20)
+# mesh$mesh$n
+# mesh2$mesh$n
+# plot(mesh)
+# plot(mesh2)
 ```
 
 Now we are ready to start fitting models
@@ -322,8 +331,9 @@ f2 <- sdmTMB(
 toc()
 f2
 #AIC 13463.99
-make_pred_obs_plots(f2,d,model_name="Fit2")
+# make_pred_obs_plots(f2,d,model_name="Fit2")
 make_cond_plot(f2,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
+
 ```
 
 One spatial field, random intercept by year.
@@ -344,8 +354,9 @@ toc()
 f3
 #AIC 13331.86
 make_pred_obs_plots(f3,d,model_name="Fit3")
-make_cond_plot(f3,thetao_ln,exp_var=T,saveplot=F)
-make_cond_plot(f3,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
+make_cond_plot(f3,thetao_ln,exp_var=T,saveplot=F)+labs(x="Temperature (C)")
+make_cond_plot(f3,bathy.bottom.depth_ln,exp_var=T,saveplot=F)+labs(x="Bottom Depth (m)")
+make_cond_plot(f3,so_ln,exp_var=T,saveplot=F)+labs(x="Salinity (psu)")
 ```
 
 Similar- one spatial field, s-t field by year instead of year intercept
@@ -367,8 +378,8 @@ toc()
 f3.2
 #AIC 13331.86
 make_pred_obs_plots(f3.2,d,model_name="Fit3.2")
-make_cond_plot(f3,thetao_ln,exp_var=T,saveplot=F)
-make_cond_plot(f3,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
+make_cond_plot(f3.2,thetao_ln,exp_var=T,saveplot=F)
+make_cond_plot(f3.2,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
 ```
 
 One spatial field, random intercept by year and depth category
@@ -557,7 +568,7 @@ tic("Fitting model: ")
 f10 <- sdmTMB(
   Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(k2_ln,k=3)+poly(thetao_ln,2)+poly(so_ln,2)+washed+(1|depth_cat),
   data = d_obs_filt,
-  mesh = mesh2,
+  mesh = mesh,
   time="year",
   spatiotemporal="IID",
   spatial="on",
@@ -578,7 +589,7 @@ tic("Fitting model: ")
 f11 <- sdmTMB(
   Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(k2_ln,k=3)+poly(thetao_ln,2)+poly(so_ln,2)+washed+(1|yr_fct),
   data = d_obs_filt,
-  mesh = mesh2,
+  mesh = mesh,
   time="year",
   spatiotemporal="IID",
   spatial="on",
@@ -597,7 +608,7 @@ tic("Fitting model: ")
 f12 <- sdmTMB(
   Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(k2_ln,k=3)+poly(thetao_ln,2)+poly(so_ln,2)+washed+(1|depth_cat)+(1|yr_fct),
   data = d_obs_filt,
-  mesh = mesh2,
+  mesh = mesh,
   time="year",
   spatiotemporal="IID",
   spatial="on",
@@ -639,7 +650,7 @@ depth.cond.p
 
 ```{r}
 thetao.cond <- purrr::map2_df(list(f2,f3,f4,f5,f7.2),c("f2","f3","f4","f5","f7.2"),function(m,n){
-  pr <- make_cond_plot(m,thetao_ln,exp_var = T,return_dat=T,saveplot = F)
+  pr <- make_cond_plot(m,thetao_ln,exp_var = F,return_dat=T,saveplot = F)
   pr %>% mutate(model=n)
 })
 
@@ -678,9 +689,62 @@ so.cond.p <- so.cond %>%
 so.cond.p
 ```
 
+## Using Presence-Absence
+
+Try to use presence/absence to make some nicer covariate plots
+
+```{r}
+f3.preds <- predict(f3,newdata=grid.pred) %>% 
+  mutate(expest=exp(est))
+f3.pa.preds <- predict(f3,newdata=grid.pred,nsim=30,model=1)
+f3.preds$pa <- rowMeans(plogis(f3.pa.preds))
+
+f3.preds %>% 
+  ggplot(aes(bathy.bottom.depth_ln %>% exp,pa))+
+  # geom_point()+
+  geom_smooth()+
+  xlim(0,1000)+ylim(0,1)+
+  labs(y="Probability of Presence",x="Bottom Depth(m)")
+
+f3.preds %>% 
+  ggplot(aes(thetao_ln %>% exp,pa))+
+  geom_point()+
+  geom_smooth()+ylim(0,1)+
+  facet_wrap(~depth_cat)+
+  labs(y="Probability of Presence",x="Temperature (C)")
+```
+
+
+# Index of Abundance
+
+Let's just sum up the predictions by year to create an index of abundance. A simple sum should work relatively well here since we are using a regular prediction grid (i.e., all the spatial cells are the same area).
+
+## Fit 3
+
+```{r}
+f3_abun <- make_abun_index(f3)+theme(axis.text=element_text(size=12))
+ggsave(here('plots','Fit 3 Abundance Index.png'),f3_abun,w=6,h=5,bg = "white")
+```
+
+
 # Make Maps
 
 We can make maps of predicted eulachon eDNA with these models.
+
+## Covariates
+
+Can also make maps of the covariates, just so we know what we're working with
+```{r}
+thetao_plot <- make_map(grid.pred,thetao)+
+    scale_fill_viridis(option="C")+
+  labs(title="Temperature")
+so_plot <- make_map(grid.pred,so)+
+    scale_fill_viridis(option="C",direction = -1)+
+  labs(title="Salinity")
+thetao_plot
+so_plot
+```
+
 
 ```{r}
 # if we want to zoom in on particular regions
@@ -693,6 +757,11 @@ orbbox <- gpsf %>% filter(y>orbbox['ymin'],y<orbbox['ymax']) %>% st_bbox()
 # Washington
 wabbox <- coastcrop %>% filter(name=="Washington") %>% st_bbox()%>% .[c(2,4)]
 wabbox <- gpsf %>% filter(y>wabbox['ymin'],y<wabbox['ymax']) %>% st_bbox()
+
+
+# Washington and Oregon
+wobbox <- coastcrop %>% filter(name%in%c("Washington","Oregon")) %>% st_bbox()%>% .[c(2,4)]
+wobbox <- gpsf %>% filter(y>wobbox['ymin'],y<wobbox['ymax']) %>% st_bbox()
 
 # california
 cabbox <- coastcrop %>% filter(name=="California") %>% st_bbox()%>% .[c(2,4)]
@@ -709,10 +778,9 @@ f3.preds <- predict(f3,newdata=grid.pred) %>%
 
 make_map(f3.preds,est)+
     scale_fill_viridis(option="C")+
-  labs(title="Fit 3",fill="ln(eDNA)")
-make_map(f3.preds,est)+
-    scale_fill_viridis(option="C")+
-  labs(title="Fit 3",fill="ln(eDNA)")
+  labs(title="Fit 3",fill="ln(eDNA)",x="",y="")+
+  theme(axis.text.x=element_blank())
+ggsave(here('plots','Fit 3 coastwide.png'),w=6,h=5,bg='white')
 
 make_map(f3.preds,est_non_rf)+ #tidy(f3,'fixed')
     scale_fill_viridis(option="C")+
@@ -727,16 +795,27 @@ make_map_bathy(f3.preds,est)+
   labs(title="Fit 3",fill="ln(eDNA)")
 make_map_bathy(f3.preds,est)+
     scale_fill_viridis(option="C")+
-  labs(title="Fit 3",fill="ln(eDNA)")+
+  labs(title="Fit 3",fill="ln(eDNA)",x="",y="")+
   ylim(orbbox[c(2,4)])+xlim(orbbox[c(1,3)])
+ggsave(here('plots','Fit 3 Oregon.png'),w=6,h=5,bg="white")
 make_map_bathy(f3.preds,est)+
     scale_fill_viridis(option="C")+
-  labs(title="Fit 3",fill="ln(eDNA)")+
+  labs(title="Fit 3",fill="ln(eDNA)",x="",y="")+
   ylim(wabbox[c(2,4)])+xlim(wabbox[c(1,3)])
+ggsave(here('plots','Fit 3 Washington.png'),w=6,h=5,bg="white")
+
 make_map_bathy(f3.preds,est)+
     scale_fill_viridis(option="C")+
-  labs(title="Fit 3",fill="ln(eDNA)")+
+  labs(title="",fill="ln(eDNA)",x="",y="")+
+  ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])+
+  coord_sf(datum=NA)
+ggsave(here('plots','Fit 3 WA and OR.png'),w=6,h=8,bg="white")
+
+make_map_bathy(f3.preds,est)+
+    scale_fill_viridis(option="C")+
+  labs(title="Fit 3",fill="ln(eDNA)",x="",y="")+
   ylim(cabbox[c(2,4)])+xlim(cabbox[c(1,3)])
+ggsave(here('plots','Fit 3 California.png'),w=6,h=5,bg="white")
 
 # quantiles?
 f3.preds %>% 
@@ -758,7 +837,13 @@ f3.preds %>%
   scale_fill_viridis(option='C',discrete=T)+
     # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
   labs(title="Fit 3",fill="Quantile (eDNA)")
+
+#presence/absence
+f3.pa.map <- make_presence_absence_map(f3)[[2]]+labs(x="",y="")+
+  ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])
+ggsave(here('plots','Fit 3 presence absence.png'),w=6,h=5,bg="white")
 ```
+
 ## Fit 4
 
 Try this with Fit 4, which was one of the better-looking models: 
@@ -890,6 +975,57 @@ f7.2.preds %>%
     # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
   labs(title="Fit 7.2",fill="Top 5% (eDNA)")
 ```
+# Test Mesh Complexity
+
+One thing that seems to have an effect on our fits is the configuration of the INLA mesh, particularly its complexity, or number of knots. Meshes that are too complex can make pretty maps, but we run the risk of overfitting. As a general rule of thumb, we want to pick a less complex mesh, but one that still allows us to make good predictions. Let's see if we can use cross-validation likelihoods to assess which mesh to use.
+
+```{r}
+# let's make a series of meshes of increasing complexity, then fit our model and test its likelihood
+knots_to_try <- seq(50,175,by=25)
+meshes <- map(knots_to_try,~make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"),n_knots=.x))
+map(meshes,plot)
+```
+
+Now try to fit the same model on each mesh
+
+```{r}
+clust <-sample(seq_len(3), size = nrow(d_obs_filt), replace = TRUE)
+meshes.ll <- map_dbl(meshes,function(m){
+  fit <- sdmTMB_cv(
+    Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed+(1|yr_fct),
+    data = d_obs_filt,
+    mesh = m,
+    offset= "offsets_all",
+    spatial="on",
+    fold_ids=clust,
+    family = stdcurve(),
+    control = sdmTMBcontrol(stdcurve_df = d)
+  )
+  fit$sum_loglik
+})
+
+```
+
+Plot the relationship between mesh complexity and the 3-fold CV likelihood. Knots is one way to measure, but there's also total vertices (`mesh$mesh$n`)
+
+```{r}
+mesh.comparison <- tibble(knots=knots_to_try,sumll=meshes.ll) %>% 
+  ggplot(aes(knots,sumll))+
+  geom_line()+geom_point()+
+  labs(x="Number of Knots",y="Summed Log Likelihood")
+mesh.comparison
+
+mesh.comparison2 <- tibble(knots=knots_to_try,sumll=meshes.ll) %>% 
+  mutate(nverts=map_dbl(meshes,~.$mesh$n)) %>% 
+  ggplot(aes(nverts,sumll))+
+  geom_line()+geom_point()+
+  labs(x="Number of Vertices",y="Summed Log Likelihood")
+mesh.comparison2
+```
+
+Looks like the 100-knot mesh may be the sweet spot! We can work this back through the code above.
+
+
 # Scratch
 
 ```{r,fig.height=8,fig.width=8}
@@ -1009,3 +1145,46 @@ make_cond_plot(m1,bottomT_ln,exp_var=T,saveplot = F)
 
 # with log(bottom temperature), uo,vo, and so, but NOT thetao: -4273.88
 ```
+
+```{r}
+tic("Fitting model: ")
+d_obs_filt$depth_cat <- factor(d_obs_filt$depth_cat)
+ft <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(so_anom,k=3)+s(thetao_anom,k=3)+washed+(1|depth_cat),
+  data = d_obs_filt,
+  offset = 'offsets_all',
+  mesh = mesh,
+  spatial="on",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+ft
+#AIC 13463.99
+# make_pred_obs_plots(f2,d,model_name="Fit2")
+make_cond_plot(ft,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
+make_cond_plot(ft,thetao_anom,exp_var=F,saveplot=F)
+```
+
+```{r}
+tic("Fitting model: ")
+ft <- sdmTMB(
+  Ct ~ 0+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+so_ln+washed+(1|yr_fct),
+  data = d_obs_filt,
+  mesh = mesh,
+  offset= "offsets_all",
+  spatial_varying= ~d1+d2+d3,
+  spatial="off",
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+toc()
+ft
+#AIC 13331.86
+make_pred_obs_plots(ft,d,model_name="Test")
+make_cond_plot(ft,thetao_ln,exp_var=T,saveplot=F)+labs(x="Temperature (C)")
+make_cond_plot(ft,bathy.bottom.depth_ln,exp_var=T,saveplot=F)+labs(x="Bottom Depth (m)")
+make_cond_plot(ft,so_ln,exp_var=T,saveplot=F)+labs(x="Salinity (psu)")
+```
+
+

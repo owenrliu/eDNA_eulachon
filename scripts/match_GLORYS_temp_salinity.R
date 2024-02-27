@@ -26,6 +26,15 @@ glorys <- glorys %>%
          month=month(date),
          year=year(date))
 
+# add a climatology of so and thetao (unique to this domain, and organize by depth category!)
+glorys <- glorys %>% 
+  group_by(latitude,longitude,depth) %>% 
+  mutate(thetao_mean=mean(thetao),
+         so_mean=mean(so)) %>% 
+  ungroup() %>% 
+  mutate(thetao_anom=thetao-thetao_mean,
+         so_anom=so-so_mean)
+
 # match to the eDNA by nearest neighbors (nngeo package)
 glorys_locs <- glorys %>% distinct(longitude,latitude) %>% 
   st_as_sf(coords=c("longitude","latitude"),crs=4326,remove=F) %>% 
@@ -57,7 +66,7 @@ glorys_filt2 <- map_df(unique(eDNA_glorys_locs$depth_cat),~(mutate(glorys_filt1,
   group_by(date,year,month,latitude,longitude,depth_cat) %>% 
   slice_min(diff) %>% 
   ungroup() %>% 
-  dplyr::select(year,month,latitude,longitude,so,thetao,uo,vo,bottomT,depth_cat) %>% 
+  dplyr::select(year,month,latitude,longitude,so,so_anom,thetao,thetao_anom,uo,vo,bottomT,depth_cat) %>% 
   mutate(across(c(latitude,longitude),~round(.,4)),.keep = "unused")
 
 # match to the eDNA data

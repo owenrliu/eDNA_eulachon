@@ -4,6 +4,7 @@
 library(contoureR)
 
 plot_theme <- theme_minimal()+theme(panel.border = element_rect(color="black",fill=NA))
+theme_black <- theme_minimal()+theme(panel.border = element_rect(color="black",fill=NA),text=element_text(color='white'))
 theme_set(plot_theme)
 
 make_pred_obs_plots <- function(modelobj,stands, model_name="",saveplots=T){
@@ -155,6 +156,7 @@ make_map <- function(dat, column) {
     geom_raster(data=dat, aes(x, y, fill = {{ column }})) +
     facet_grid(year~depth_cat)+
     theme_minimal()+
+    labs(x="",y="")+
     theme(panel.border = element_rect(color='black',fill=NA),
           axis.text.x=element_blank())
 }
@@ -162,7 +164,7 @@ make_map <- function(dat, column) {
 make_map_bathy <- function(dat, column) {
   ggplot() + geom_sf(data=coastcrop)+
     geom_raster(data=dat, aes(x, y, fill = {{ column }})) +
-    geom_path(data=bathycrop,aes(x,y,group=Group),color='gray30')+
+    geom_path(data=bathycrop,aes(x,y,group=Group),color='gray30',linewidth=0.5)+
     facet_grid(year~depth_cat)+
     theme_minimal()+
     theme(panel.border = element_rect(color='black',fill=NA),
@@ -198,16 +200,17 @@ make_presence_absence_map <- function(modelobj,predgrid=grid.pred){
   return(list(p1,p2))
 }
 # MAKE CONDITIONAL PLOTS WITH PREDICT()
-# not quite there yet
 make_cond_plot <- function(modelobj,v,exp_var=F,saveplot=T,return_dat=F){
-  d <- modelobj$data
+  d <- modelobj$data %>% 
+    # what if we used conditional means based on presence only...
+    filter(Ct>0)
   var_range <- d %>% dplyr::select({{v}}) %>% pull(1) %>% range()
   varseq <- seq(var_range[1],var_range[2],length.out=100)
   
   
   dmeans <- d %>%
     # what if we used conditional means based on presence only...
-    # filter(Ct>0) %>% 
+    filter(Ct>0) %>%
     summarise(across(where(is.numeric),mean)) %>% 
     # and some factor levels (assume surface, 2019)
     mutate(depth_cat=factor("0",levels=c("0","50","150")),
@@ -243,4 +246,25 @@ make_cond_plot <- function(modelobj,v,exp_var=F,saveplot=T,return_dat=F){
   }
   if(return_dat) return(pr)
   else return(plot.out)
+}
+
+# SUM ABUNDANCE WITH PREDICTIONS
+
+make_abun_index <- function(modelobj){
+  preds <- predict(modelobj,newdata=grid.pred) %>% 
+    mutate(expest=exp(est))
+  abun_yr <- preds %>% 
+    group_by(year,depth_cat) %>% 
+    summarise(abun_idx=sum(expest))
+  abun_index_plot <- abun_yr %>% 
+    ggplot(aes(year,abun_idx,fill=factor(depth_cat)))+
+    geom_col(position='stack')+
+    scale_fill_manual(values=viridis_pal(option="C")(3))+
+    labs(x="Year",y="Index of Abundance\n(total eulachon eDNA)",fill="Depth Category")
+  abun_index_plot2 <- abun_yr %>% 
+    ggplot(aes(depth_cat,abun_idx,fill=factor(year)))+
+    scale_fill_manual(values=c('gray20','#BD3786FF'))+
+    geom_col(position='dodge')+
+    labs(x="Depth Category",y="Index of Abundance\n(total eulachon eDNA)",fill="Year")
+  return(abun_index_plot2)
 }
