@@ -1,7 +1,7 @@
 ---
 title: "Krill NASC Matching"
 author: "Owen R. Liu"
-date: "2024-01-29"
+date: "2024-04-08"
 output: 
   html_document:
     toc: true
@@ -24,21 +24,32 @@ library(contoureR)
 library(sdmTMB)
 library(nngeo)
 library(corrplot)
+library(tictoc)
 ```
 
 # Purpose
 
-The goal of this analysis is to explore patterns in the distribution and relative abundance of krill from [Beth Phillips' work](https://onlinelibrary.wiley.com/doi/full/10.1111/fog.12628). Then, we will spatially match it to our eulachon eDNA samples in order to use krill abundacne as a predictor in eulachon SDMs.
+The goal of this analysis is to explore patterns in the distribution and relative abundance of krill from [Beth Phillips' work](https://onlinelibrary.wiley.com/doi/full/10.1111/fog.12628). Then, we will spatially match it to our eulachon eDNA samples in order to use krill abundance as a predictor in eulachon SDMs.
+
+As of April, 2024, Owen is updating this to include Beth's smoothed krill data---aligned with her paper, the binning is done with kernel density estimates in 20km, along-transect bins, with a 50km bandwidth.
 
 # Import Data
 
-Import the krill backscatter data. The data represent relative krill densities between 50-300 m in the water column, along all transects that collected acoustic data during the years 2019, 2021, and 2023. In the data, ID is a combination of Transect number and Interval (horizontal 0.5 nmi bin, with numbering starting at 1 at the start of each transect), and the min/max depth of each 10m bin. All of the zeroes are still included, along with positive NASC values.
+There are two versions of the krill data we will use. The first is the raw NASC backscatter data, which we will summarize in various ways. The second is a version of the data filtered through kernel density estimation, as in Phillips et al. (2021).
+
+First, import the krill backscatter data. The data represent relative krill densities between 50-300 m in the water column, along all transects that collected acoustic data during the years 2019, 2021, and 2023. In the data, ID is a combination of Transect number and Interval (horizontal 0.5 nmi bin, with numbering starting at 1 at the start of each transect), and the min/max depth of each 10m bin. All of the zeroes are still included, along with positive NASC values.
 
 ```{r}
 kdf <- read_csv(here('data','HakeSurvey_KrillNASC_0.5nmix10m_cells_2019-2023.csv'))
 ```
+Import the KDE/kriged version of the krill data.
+
+```{r}
+kde <- read_csv(here('data','KrillKDE_2019_2023.csv'))
+```
 
 Import the eulachon samples
+
 ```{r}
 d_obs <- read_rds(here('data','qPCR','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
   mutate(Ct=replace_na(Ct,0)) %>% # delta-models in sdmTMB need this
@@ -81,7 +92,7 @@ bdf <- fortify(b) %>%
 
 # Visualize Patterns
 
-## Overall Histograms of NASC
+## NASC- Summary Histograms
 
 ```{r}
 ksf <- kdf %>% st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% st_transform(pred.crs)
@@ -98,7 +109,7 @@ ksf %>%
 ksf %>% 
   mutate(big_depth_category=cut(Layer_depth_min,10)) %>% 
   ggplot(aes(log(NASC),color=factor(Year)))+
-  geom_density(size=1.5)+theme_minimal()+
+  geom_density(linewidth=1.5)+theme_minimal()+
   scale_color_aaas()+
   labs(x="log (NASC)",title="Distribution by Depth Category")+
   facet_wrap(~big_depth_category)
@@ -106,7 +117,26 @@ ksf %>%
 
 log (NASC) looks pretty normal, with a heavy left tail (zeroes). When faceted by depth bin, it's clear that in general, there were more krill in 2019 than in 2021 or 2023. 
 
-## Latitude by Depth
+## KDE- Summary Histograms
+
+Similar to above, but look at Beth's KDE. The KDE is summed through the water column and scales from 0 to 1.
+
+```{r}
+kde_sf <- kde %>% st_as_sf(coords=c("lon","lat"),crs=4326) %>% st_transform(pred.crs) %>% 
+  mutate(x=st_coordinates(.)[,1],y=st_coordinates(.)[,2])
+
+# raw
+kde_sf %>% 
+  ggplot(aes(kde))+
+  geom_density()+theme_minimal()
+# natural log
+kde_sf %>% 
+  ggplot(aes(log(kde)))+
+  geom_density()+theme_minimal()+
+  labs(x="log (KDE)")
+```
+
+## NASC- Latitude by Depth
 
 ```{r,fig.width=8,fig.height=8}
 latdepth_plot <- kdf %>% 
@@ -117,12 +147,14 @@ latdepth_plot <- kdf %>%
   scale_color_viridis(option="magma",na.value='gray80')+
   scale_size_area(max_size=4,na.value=0.5)+
   facet_wrap(~Year)+
+  labs(x="Sample Depth (m)",title="NASC by Latitude/Sample Depth")+
   theme_minimal()+theme(panel.background = element_rect(color="black",fill=NA))
 latdepth_plot
 ```
+
 This combined figure of latitude, depth, and NASC shows the change in depth distribution by latitude across years. In it, it is clear that there are differences in not only the depth distribution of krill among years (as shown in the last two plots), but also there are hotspots in different places along the coast (e.g., the presence of krill at 40N in 2019 but not really in either subsequent year; the large surface hotspots that occur in 2021 but not in other years at ~38N and ~47N, etc.)
 
-## NASC by Transect
+## NASC- by Transect
 
 Similar to the above, we can parse the NASC outputs by transect to look at patterns.
 
@@ -169,7 +201,23 @@ plot_grid(plotlist=plts[121:134],nrow=4)
 
 Some interesting interannual changes are obvious here, both depth shifts between years and magnitude of the signal.
 
-## Maps
+## KDE- Latitude by Bottom Depth
+
+The KDE is flat (summed vertically), but we can still look at krill distribution by latitude and bottom depth. This differs from the NASC latitude-by-depth plot above, since we use bottom depth here instead of sample depth.
+
+```{r}
+kde_latdepth_plot <- kde %>% 
+  ggplot(aes(z/10,lat,size=kde,color=kde))+
+  geom_point()+
+  scale_color_viridis(option="magma",na.value='gray80')+
+  scale_size_area(max_size=4,na.value=0.5)+
+  facet_wrap(~year)+
+  labs(x="Bottom Depth (m)",title="Krill KDE by Latitude/Bottom Depth")+
+  theme_minimal()+theme(panel.background = element_rect(color="black",fill=NA))
+kde_latdepth_plot
+```
+
+## NASC- Maps
 
 Similar to the plots above, these are coastwide maps of krill NASC by lumped depth category. In the plots, larger and "hotter" (yellow/red) points indicate higher NASC values. Many of the same patterns (e.g., greater abundance in 2019 in many places) are apparent.
 
@@ -195,6 +243,22 @@ NASC_by_depth_map <- ksf %>%
   }))
 NASC_by_depth_map$p
 ```
+
+## KDE- Maps
+
+The KDE map is simpler, because there is only one value per location (i.e., it is depth-integrated).
+
+```{r}
+kde_by_year_map <- ggplot()+
+  geom_raster(data=kde_sf,aes(easting_m,northing_m,fill=kde),interpolate = FALSE)+
+  # geom_sf(data=coast,fill='gray80')+
+  scale_fill_viridis(option="C",limits=c(0,1),na.value='gray80')+
+  facet_wrap(~year,nrow=1)+
+  theme_minimal()+
+  theme(panel.border=element_rect(color='black',fill=NA))
+kde_by_year_map
+```
+
 
 # Match to Eulachon Data
 
@@ -246,7 +310,7 @@ kdf_2d_maps$p
 
 These plots are hard to parse visually---still trying to think of the best way to display them.
 
-## Find Neighbors
+## NASC- Find Neighbors
 
 Let's match eDNA and krill by year and location. There are multiple ways we can conceptualize that this matching might work, depending on how much smoothing or averaging we want to do, across both latitude/longitude and depth. For example, we can match each eDNA sample to its nearest neighbor in lat/lon space, then extract the krill NASC value from the closest depth to our eDNA sample. Alternatively, we could do the same, but use a depth-integrated version of krill, as we calculated in the previous step. Finally, we could average krill NASC among, e.g., the five nearest neighbors to each eDNA sample, or among all samples within some distance of the eDNA sample.
 
@@ -313,7 +377,6 @@ match_krill <- function(dfrow,nn=5){
 
 ```{r,eval=F}
 # Run on entire dataset
-library(tictoc)
 tic("Matching krill nearest neighbors")
 edna_krill_matched_5nn <- d_obs %>%
   mutate(transect1=str_split_i(station,"-",1) %>% as.integer(),
@@ -341,7 +404,7 @@ edna_krill_matched_5nn <- read_rds(here('model output','edna_krill_matched_5nn.r
 ```
 
 
-## Calculate Krill Metrics
+## NASC- Calculate Krill Metrics
 
 Options:
 
@@ -549,22 +612,26 @@ kfit.preds.eul.pts <- d_obs %>%
 edna_krill_metrics$k6 <- exp(kfit.preds.eul.pts$est)
 ```
 
+# KDE- Matching
+
+We now have 6 alternative krill metrics (k1 to k5 summarized from raw NASC, and k6 matched from our krill SDM). The last metric to include is the nearest neighbor matching of Beth's krill KDE.
+
 ```{r}
-# nearest neighbor matching (deprecated, probably don't need this because we're just predicting at the observation points)
-# d_obs_sf <- d_obs %>% st_as_sf(coords=c("utm.lon.m","utm.lat.m"),crs=pred.crs)
-# kfit.preds.sf <- kfit.preds %>% st_as_sf(coords=c("x","y"),crs=pred.crs) %>% 
-#   # only need to join the estimate of krill
-#   dplyr::select(Year,est) %>% 
-#   mutate(k6=exp(est))
+# nearest neighbor matching 
+d_obs_sf <- d_obs %>% st_as_sf(coords=c("utm.lon.m","utm.lat.m"),crs=pred.crs)
+kde.preds.sf <- kde_sf %>% 
+  # only need to join the estimate of krill
+  dplyr::select(year,kde) %>%
+  mutate(k7=kde)
 # 
-# d_obs_kfit_join <- purrr::map_df(unique(d_obs_sf$year),function(y){
-#   d_obs_sf %>% filter(year==y) %>% st_join(kfit.preds.sf %>% filter(Year==y),st_nn,k=1)
-# })
+d_obs_kde_join <- purrr::map_df(unique(d_obs_sf$year),function(y){
+  d_obs_sf %>% filter(year==y) %>% st_join(kde.preds.sf %>% filter(year==y),st_nn,k=1)
+})
 # 
-# edna_krill_metrics$k6 <- d_obs_kfit_join$k6
+edna_krill_metrics$k7 <- d_obs_kde_join$k7
 ```
 
-## Save 
+# Save 
 
 ```{r,eval=F}
 # matched to samples
@@ -587,17 +654,16 @@ edna_krill_metrics <- read_rds(here('model output','edna_krill_metrics.rds'))
 Are krill and eDNA correlated?
 
 ```{r,fig.height=8,fig.width=6,warning=F,message=F}
-
 edna_krill_cor <- edna_krill_metrics %>%  
   filter(Ct>0,depth_cat<300) %>% 
-  dplyr::select(Ct,copies_ul,k1:k6) %>%
+  dplyr::select(Ct,copies_ul,k1:k7) %>%
   # only positive estimates, and only eulachon-relevant samples
   cor(use = "complete.obs")
 corrplot(edna_krill_cor,method='number')
 
 # pairs plot, including zeroes
 edna_krill_pairs_zeroes <- edna_krill_metrics %>% 
-  dplyr::select(Ct,k1:k6) %>% 
+  dplyr::select(Ct,k1:k7) %>% 
   GGally::ggpairs()+
   ggtitle("Pairs plots, all eDNA observations")
 
@@ -606,7 +672,7 @@ edna_krill_pairs_zeroes
 # pairs plot, excluding zeroes for Ct
 edna_krill_pairs <- edna_krill_metrics %>% 
   filter(Ct>0, depth_cat<300) %>% 
-  dplyr::select(Ct,k1:k6) %>% 
+  dplyr::select(Ct,k1:k7) %>% 
   GGally::ggpairs()+
   ggtitle("Pairs plots, for all Ct>0")
 
@@ -615,7 +681,7 @@ edna_krill_pairs
 # pairs plot, excluding zeroes for Ct AND krill
 edna_krill_pairs_positive_only <- edna_krill_metrics %>% 
   filter(Ct>0, k1>0, depth_cat<300) %>% 
-  dplyr::select(Ct,k1:k6) %>% 
+  dplyr::select(Ct,k1:k7) %>% 
   GGally::ggpairs()+
   ggtitle("Pairs plots, for all Ct>0 AND krill>0")
 

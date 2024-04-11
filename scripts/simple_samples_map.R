@@ -1,6 +1,7 @@
 # Map of sampling locations, 2019 and 2021
 library(tidyverse)
 library(sf)
+library(rnaturalearth)
 
 pred.crs <- terra::rast(here('data','raster_grid_blake','fivekm_grid.tif')) %>% st_crs()
 coast <- ne_states(country='United States of America',returnclass = 'sf') %>%

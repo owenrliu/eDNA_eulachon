@@ -216,8 +216,6 @@ make_cond_plot <- function(modelobj,v,exp_var=F,saveplot=T,return_dat=F){
     mutate(depth_cat=factor("0",levels=c("0","50","150")),
            yr_fct=factor("2019",levels=c("2019","2021")))
     
-  # if we need factors
-  dmeans
   dummydat <- map_df(seq_len(length(varseq)),~dmeans) %>% mutate({{v}} := varseq)
   pr <- predict(modelobj,newdata=dummydat,se_fit=TRUE,re_form=NA)
   pr <- pr %>% mutate(
@@ -263,8 +261,25 @@ make_abun_index <- function(modelobj){
     labs(x="Year",y="Index of Abundance\n(total eulachon eDNA)",fill="Depth Category")
   abun_index_plot2 <- abun_yr %>% 
     ggplot(aes(depth_cat,abun_idx,fill=factor(year)))+
-    scale_fill_manual(values=c('gray20','#BD3786FF'))+
+    scale_fill_manual(values=c('gray20','#5DC863FF'))+
     geom_col(position='dodge')+
     labs(x="Depth Category",y="Index of Abundance\n(total eulachon eDNA)",fill="Year")
   return(abun_index_plot2)
+}
+
+make_lat_abundance <- function(modelobj){
+  preds <- predict(modelobj,newdata=grid.pred) %>% 
+    mutate(expest=exp(est))
+  abun_yr_lat <- preds %>% 
+    group_by(year,lat_glorys,depth_cat) %>% 
+    summarise(abun_idx=sum(expest))
+  abun_index_plot <- abun_yr_lat %>% 
+    ggplot(aes(lat_glorys,log10(abun_idx),color=factor(depth_cat)))+
+    geom_line()+
+    coord_flip()+
+    scale_color_manual(values=PNWColors::pnw_palette("Starfish",3))+
+    facet_wrap(~year)+
+    labs(y="Log10(Total eDNA)",x="Latitude",color="Depth")+
+    theme(text=element_text(size=14))
+  return(abun_index_plot)
 }

@@ -200,16 +200,17 @@ samps_depths <- datjoin_final %>%
   ungroup()
 samps_depths
 eul_samps_depths_p <- samps_depths %>% 
+  filter(depth_cat %in% c(0,50,150)) %>% 
   mutate(num_zeroes=num_samp-num_pos) %>% 
   pivot_longer(num_pos:num_zeroes,names_to="type",values_to = "numsamp") %>% 
   mutate(type=ifelse(type=="num_pos","Amplified","Did not amplify")) %>% 
-  ggplot(aes(depth_cat,numsamp,fill=type))+
+  ggplot(aes(factor(depth_cat),numsamp,fill=type))+
   geom_col(position='stack')+
   facet_wrap(~year)+
-  scale_fill_manual(values=pnw_palette(name="Starfish",n=4,type="discrete")[c(1,4)])+
+  scale_fill_manual(values=pnw_palette(name="Starfish",n=5,type="discrete")[c(1,4)])+
   labs(x="Depth Category",y="Number of Samples",fill="Type")
 eul_samps_depths_p
-ggsave(here('plots','eulachon_samples_by_year_depth_filtered.png'),eul_samps_depths_p,width=5,height=6,bg = "white")
+ggsave(here('plots','eulachon_samples_by_year_depth_filtered.png'),eul_samps_depths_p,width=6,height=4,bg = "white")
 
 stand.curves.all <- standjoin %>% 
   ggplot(aes(log10(known_conc_ul),Ct,color=plate))+
