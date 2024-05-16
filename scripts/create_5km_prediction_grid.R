@@ -1,7 +1,9 @@
 library(tidyverse)
 library(sf)
 library(terra)
+library(rnaturalearth)
 library(here)
+library(nngeo)
 
 # Blake's raster with just grid cell ID numbers
 dat_raster=rast(here('Data','raster_grid_blake','fivekm_grid.tif'))
@@ -131,7 +133,12 @@ grid_glorys_join <- grid_glorys_join %>%
 # the last value we have to join is for krill
 # see krill matching script for details
 krill_preds <- read_rds(here('model output','krill_sdm_matched_to_pred_grid.rds'))
-grid_glorys_krill_join <- grid_glorys_join %>% left_join(krill_preds,by=join_by(x, y, fivekm_grid, bathy.bottom.depth, year))
+k4 <- read_rds(here('model output','krill_k4_k5_matched_to_pred_grid.rds')) %>% dplyr::select(-depth_cat)
+grid_glorys_krill_join <- grid_glorys_join %>% 
+  left_join(krill_preds,by=join_by(x, y, fivekm_grid, bathy.bottom.depth, year)) %>% 
+  left_join(k4)
+grid_glorys_krill_join <- grid_glorys_krill_join %>% 
+  filter(!is.na(thetao))
 
 # this looked like it matched correctly (1 to 1, and the locations and depths look right)
 write_rds(grid_glorys_krill_join,here('data','prediction_grid_5km_sdmTMB_with_covars.rds'))

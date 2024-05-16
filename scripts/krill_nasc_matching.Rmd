@@ -631,6 +631,76 @@ d_obs_kde_join <- purrr::map_df(unique(d_obs_sf$year),function(y){
 edna_krill_metrics$k7 <- d_obs_kde_join$k7
 ```
 
+# NASC to Grid Matching
+
+Need to match krill dataset to prediction grid for calculation of some of the prediction variables.
+
+```{r}
+klocs19 <- kdf_2d %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2019))
+klocs21 <- kdf_2d %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2021))
+
+grlocs.pred19 <- grid.pred %>% 
+  dplyr::select(x:month) %>% 
+  st_as_sf(coords=c("x","y"),crs=pred.crs,remove=F) %>% 
+  filter(year%in% c(2019))
+grlocs.pred21 <- grid.pred %>% 
+  dplyr::select(x:month) %>% 
+  st_as_sf(coords=c("x","y"),crs=pred.crs,remove=F) %>% 
+  filter(year%in% c(2021))
+
+# find5 nearest neighbors to each grid cell
+k_gr_match_2019 <- st_nn(grlocs.pred19,klocs19,k=5,returnDist = T)
+k_gr_match_2021 <- st_nn(grlocs.pred21,klocs21,k=5,returnDist = T)
+
+# calculate k4 (inverse squared distance weighted krill)
+gr_krill_k4_19 <- purrr::map2_dbl(k_gr_match_2019$nn,k_gr_match_2019$dist,function(idx,d){
+  distweight <- 1/(d^2)
+  weighted.mean(klocs19$sumNASC[idx],distweight)
+})
+gr_krill_k4_21 <- purrr::map2_dbl(k_gr_match_2021$nn,k_gr_match_2021$dist,function(idx,d){
+  distweight <- 1/(d^2)
+  weighted.mean(klocs21$sumNASC[idx],distweight)
+})
+
+# calculate k5 (inverse distance weighted krill)
+gr_krill_k5_19 <- purrr::map2_dbl(k_gr_match_2019$nn,k_gr_match_2019$dist,function(idx,d){
+  distweight <- 1/(d)
+  weighted.mean(klocs19$sumNASC[idx],distweight)
+})
+gr_krill_k5_21 <- purrr::map2_dbl(k_gr_match_2021$nn,k_gr_match_2021$dist,function(idx,d){
+  distweight <- 1/(d)
+  weighted.mean(klocs21$sumNASC[idx],distweight)
+})
+
+
+grid.pred.k19 <- grlocs.pred19 %>% mutate(k4=gr_krill_k4_19,k5=gr_krill_k5_19)
+grid.pred.k21 <- grlocs.pred21 %>% mutate(k4=gr_krill_k4_21,k5=gr_krill_k5_21)
+grid.pred.k <- bind_rows(grid.pred.k19,grid.pred.k21)%>% st_set_geometry(NULL)
+
+grid.pred.k %>% 
+  ggplot(aes(x,y,fill=k4))+
+  geom_raster()+
+  coord_equal()+
+  facet_wrap(~year)+
+  scale_fill_viridis(option="magma")
+
+grid.pred.k %>% 
+  ggplot(aes(x,y,fill=k5))+
+  geom_raster()+
+  coord_equal()+
+  facet_wrap(~year)+
+  scale_fill_viridis(option="magma")
+
+
+```
+
+
 # Save 
 
 ```{r,eval=F}
@@ -638,10 +708,12 @@ edna_krill_metrics$k7 <- d_obs_kde_join$k7
 write_rds(edna_krill_metrics,here('model output','edna_krill_metrics.rds'))
 
 # matched to prediction grid
+# we add our inverse distance-weighted k4 metric too
 kfit.preds.out <- kfit.preds %>% 
   filter(Year %in% c(2019,2021)) %>% 
   dplyr::select(x:bathy.bottom.depth,k6_ln=est,year=Year)
 write_rds(kfit.preds.out,here('model output','krill_sdm_matched_to_pred_grid.rds'))
+write_rds(grid.pred.k,here('model output','krill_k4_k5_matched_to_pred_grid.rds'))
 ```
 
 ```{r}

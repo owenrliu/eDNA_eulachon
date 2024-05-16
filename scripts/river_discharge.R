@@ -29,7 +29,9 @@ locs_disc <- locs %>% left_join(disc,by = join_by(RC4USCoast_ID)) %>%
   mutate(month=month(time)) %>% 
   filter(month %in% c(1,2,3,4,5)) %>% 
   group_by(mouth_lat,mouth_lon,river_name) %>% 
-  summarise(discharge_mean=mean(disc))
+  summarise(discharge_mean=mean(disc)) %>% 
+  ungroup()
+write_rds(locs_disc,here('data','rivers_mean_discharge_MarMay.rds'))
 
 latmap <- locs_disc %>% 
   ggplot(aes(mouth_lat,1))+
@@ -62,7 +64,7 @@ river_locs <- locs %>% dplyr::select(river_name,mouth_lat,mouth_lon) %>%
   st_transform(pred.crs) %>% 
   mutate(utm.lon.km=st_coordinates(.)[,1]/1000,utm.lat.km=st_coordinates(.)[,2]/1000)
 
-# weighting factors will be 1 divided by the square of the distance to each river
+# weighting factors will be based on distance to each river
 make_weights_surface <- function(name_of_river,decay_term=10){ # decay term here controls the strength of decay over distance
   river_info <- locs_disc %>% filter(river_name==name_of_river)
   river_xy <- river_info %>% dplyr::select(mouth_lon,mouth_lat) %>% 
@@ -112,5 +114,18 @@ ggplot()+
   theme(panel.border = element_rect(color='black',fill=NA),
         axis.text.x=element_blank())
 
+# matched to eDNA data
+# match to the eDNA by nearest neighbors (nngeo package)
+
+eDNA_gr_locs <- read_rds(here('data','qPCR','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
+  st_as_sf(coords=c("lon","lat"),crs=4326,remove=F) %>% 
+  st_transform(st_crs(gr)) %>% 
+  # join nearest neighbors
+  st_join(gr %>% mutate(gid=row_number()) %>% dplyr::select(gid),st_nn) %>% st_set_geometry(NULL)
+
+eDNA_river_influence_matched <- eDNA_gr_locs %>% left_join(riverine_influence,by='gid')
+
 # save
 write_rds(riverine_influence,here('data','river_influence_grid_matched.rds'))
+
+write_rds(eDNA_river_influence_matched,here('data','eDNA_river_influence_matched.rds'))

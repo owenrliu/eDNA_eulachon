@@ -23,7 +23,7 @@ make_pred_obs_plots <- function(modelobj,stands, model_name="",saveplots=T){
     # join hierarchical params for std curves
     left_join(df,by=join_by(plate)) %>% 
     mutate(kappa_samp=std_xi_0+std_xi_1*est,
-           theta_samp=std_xi_2+std_xi_3*est) %>% 
+           theta_samp=std_xi_2+std_xi_3*exp(est)) %>% 
     mutate(Ct_bin=ifelse(Ct>0,1,0))
   
   pred.stand <- stands %>% 
@@ -40,7 +40,7 @@ make_pred_obs_plots <- function(modelobj,stands, model_name="",saveplots=T){
   #   theme_bw()
   
   ### MAKE SOME STANDARDS PLOTS
-  STAND.BREAKS = c(1,5,10,100,1000,10000,100000)*2 %>% as.integer()
+  STAND.BREAKS = c(1,5,10,100,1000,10000,100000) %>% as.integer()
   
   p_bin_stand <- ggplot(pred.stand) +
     geom_jitter(aes(y=Ct_bin,x=known_conc_ul),width=0,alpha=0.5,height=0.05) +
@@ -111,7 +111,7 @@ coast <- ne_states(country='United States of America',returnclass = 'sf') %>%
 
 # here's the grid to predict with
 grid.pred <- read_rds(here('data','prediction_grid_5km_sdmTMB_with_covars.rds')) %>% 
-  mutate(across(c(thetao,so,bathy.bottom.depth,bottomT),list(ln=function(x){
+  mutate(across(c(thetao,so,bathy.bottom.depth,bottomT,k5),list(ln=function(x){
     x[x==0]<-1
     log(x)
   }))) %>% 
@@ -267,19 +267,34 @@ make_abun_index <- function(modelobj){
   return(abun_index_plot2)
 }
 
-make_lat_abundance <- function(modelobj){
+make_lat_abundance <- function(modelobj,depth_integrate=F){
   preds <- predict(modelobj,newdata=grid.pred) %>% 
     mutate(expest=exp(est))
-  abun_yr_lat <- preds %>% 
-    group_by(year,lat_glorys,depth_cat) %>% 
-    summarise(abun_idx=sum(expest))
-  abun_index_plot <- abun_yr_lat %>% 
-    ggplot(aes(lat_glorys,log10(abun_idx),color=factor(depth_cat)))+
-    geom_line()+
-    coord_flip()+
-    scale_color_manual(values=PNWColors::pnw_palette("Starfish",3))+
-    facet_wrap(~year)+
-    labs(y="Log10(Total eDNA)",x="Latitude",color="Depth")+
-    theme(text=element_text(size=14))
+  
+  if(depth_integrate){
+    abun_yr_lat <- preds %>% 
+      group_by(year,lat_glorys) %>% 
+      summarise(abun_idx=sum(expest)/1e05) # just to make plotting simpler
+    abun_index_plot <- abun_yr_lat %>% 
+      ggplot(aes(lat_glorys,abun_idx))+
+      geom_line()+
+      coord_flip()+
+      facet_wrap(~year)+
+      labs(y="Total eDNA Index",x="Latitude")+
+      theme(text=element_text(size=14))
+  } else{
+    abun_yr_lat <- preds %>% 
+      group_by(year,lat_glorys,depth_cat) %>% 
+      summarise(abun_idx=sum(expest))
+    abun_index_plot <- abun_yr_lat %>% 
+      ggplot(aes(lat_glorys,abun_idx,color=factor(depth_cat)))+
+      geom_line()+
+      coord_flip()+
+      scale_color_manual(values=PNWColors::pnw_palette("Starfish",3))+
+      facet_wrap(~year)+
+      labs(y="Total eDNA Index",x="Latitude",color="Depth")+
+      theme(text=element_text(size=14))
+  }
+  
   return(abun_index_plot)
 }

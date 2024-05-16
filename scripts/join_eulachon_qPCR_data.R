@@ -92,22 +92,49 @@ datjoin <- datjoin %>% filter(!is.na(volume))
 stations_depths_count_all_filt<- datjoin %>% count(year,station,depth_cat)
 
 # Thin, clean, bind standards data
-stand19_thin <- stand19 %>% 
-  dplyr::select(qPCR,Ct,known_conc_ul=copies_ul) %>% 
-  mutate(year=2019)
-stand21_thin <- stand21 %>% 
-  dplyr::select(qPCR,Ct,known_conc_ul=copies_ul) %>% 
-  mutate(year=2021)
-standjoin <- stand19_thin %>% 
-  bind_rows(stand21_thin) %>% 
+
+standjoin <- mutate(stand19,year=2019)%>% 
+  bind_rows(mutate(stand21,year=2021)) %>% 
   rename(plate=qPCR) %>% 
-  mutate(Ct=na_if(Ct,-99))
-glimpse(standjoin)
+  mutate(Ct=na_if(Ct,-99)) %>% 
+  # make a dummy row identifier so we can more easily make substitutions
+  mutate(sid=row_number())
+
+### IMPORTANT DATA QA/QC STEP ###
+# some of the standards seem to have been labeled as unknowns
+# find them and fix them
+prbs <- standjoin %>% filter(hake_task=="STANDARD",task!="STANDARD") #mislabeled as unknowns
+# find rows where the first character of known copies is NOT 1 or 5
+prbs2 <- standjoin %>%filter(!(as.numeric(substr(copies_ul, 1, 1))%in%c(1,5))) 
+prbs <- bind_rows(prbs,prbs2) %>% distinct()
+# fix copies_ul for these samples based on the following rule
+# if sample== E00, that should be 1 copy
+# likewise, E01 should be 10 copies, E02 is 100 copies, etc.
+# "5" should actually be the weird E00/01 or E0.5, which is 5 copies
+standjoin$copies_ul[standjoin$sid==117] <- 5
+standjoin$copies_ul[standjoin$sid==287] <- 1
+standjoin$copies_ul[standjoin$sid==531] <- 1
+standjoin$copies_ul[standjoin$sid==687] <- 100
+standjoin$copies_ul[standjoin$sid==697] <- 1
+standjoin$copies_ul[standjoin$sid==723] <- 1
+standjoin$copies_ul[standjoin$sid==762] <- 10
+standjoin$copies_ul[standjoin$sid==771] <- 1
+standjoin$copies_ul[standjoin$sid==791] <- 1
+standjoin$copies_ul[standjoin$sid==73] <- 1
+standjoin$copies_ul[standjoin$sid==784] <- 10
+###
+
+# select only the essential columns for output
+standjoin_thin <- standjoin %>% 
+  dplyr::select(plate,Ct,known_conc_ul=copies_ul,year)
+
+glimpse(standjoin_thin)
+unique(standjoin_thin$known_conc_ul) # looks way better!
 
 #### OFFSETS AND CORRECTIONS ####
 
 # ADD CORRECTION FOR 2uL ADDITION INSTEAD OF 1
-standjoin <- standjoin %>% mutate(known_conc_ul = known_conc_ul*2)
+standjoin_thin <- standjoin_thin %>% mutate(known_copies = known_conc_ul*2)
 
 # ADD OFFSETS FOR DILUTION AND VOLUME FOR UNKNOWN SAMPLES
 datjoin <- datjoin %>% 
@@ -212,7 +239,7 @@ eul_samps_depths_p <- samps_depths %>%
 eul_samps_depths_p
 ggsave(here('plots','eulachon_samples_by_year_depth_filtered.png'),eul_samps_depths_p,width=6,height=4,bg = "white")
 
-stand.curves.all <- standjoin %>% 
+stand.curves.all <- standjoin_thin %>% 
   ggplot(aes(log10(known_conc_ul),Ct,color=plate))+
   geom_point()+
   guides(color='none')+
@@ -223,5 +250,5 @@ stand.curves.all
 ggsave(here('plots','eulachon_standards_raw.png'),stand.curves.all,width=6,height=5,bg = "white")
 
 # Save!
-write_rds(standjoin,here('data','qPCR','eulachon qPCR 2019 and 2021 standards clean.rds'))
+write_rds(standjoin_thin,here('data','qPCR','eulachon qPCR 2019 and 2021 standards clean.rds'))
 write_rds(datjoin_final,here('data','qPCR','eulachon qPCR 2019 and 2021 samples clean.rds'))
