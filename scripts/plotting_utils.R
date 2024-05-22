@@ -111,7 +111,7 @@ coast <- ne_states(country='United States of America',returnclass = 'sf') %>%
 
 # here's the grid to predict with
 grid.pred <- read_rds(here('data','prediction_grid_5km_sdmTMB_with_covars.rds')) %>% 
-  mutate(across(c(thetao,so,bathy.bottom.depth,bottomT,k5),list(ln=function(x){
+  mutate(across(c(thetao,so,bathy.bottom.depth,bottomT,k2,k4,k5),list(ln=function(x){
     x[x==0]<-1
     log(x)
   }))) %>% 

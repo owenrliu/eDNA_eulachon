@@ -122,6 +122,9 @@ standjoin$copies_ul[standjoin$sid==771] <- 1
 standjoin$copies_ul[standjoin$sid==791] <- 1
 standjoin$copies_ul[standjoin$sid==73] <- 1
 standjoin$copies_ul[standjoin$sid==784] <- 10
+
+#SHOULD CHECK SID #1342- ONLY STANDARD AT 5 COPIES THAT DID NOT AMPLIFY?
+
 ###
 
 # select only the essential columns for output

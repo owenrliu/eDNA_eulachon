@@ -133,7 +133,7 @@ grid_glorys_join <- grid_glorys_join %>%
 # the last value we have to join is for krill
 # see krill matching script for details
 krill_preds <- read_rds(here('model output','krill_sdm_matched_to_pred_grid.rds'))
-k4 <- read_rds(here('model output','krill_k4_k5_matched_to_pred_grid.rds')) %>% dplyr::select(-depth_cat)
+k4 <- read_rds(here('model output','krill_k2_k4_k5_matched_to_pred_grid.rds')) %>% dplyr::select(-depth_cat)
 grid_glorys_krill_join <- grid_glorys_join %>% 
   left_join(krill_preds,by=join_by(x, y, fivekm_grid, bathy.bottom.depth, year)) %>% 
   left_join(k4)

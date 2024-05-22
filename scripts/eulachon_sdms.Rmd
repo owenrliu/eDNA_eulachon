@@ -199,6 +199,11 @@ d_obs_filt$depth_cat <- factor(d_obs_filt$depth_cat)
 d_obs_filt$yr_fct <- as.factor(d_obs_filt$year)
 ```
 
+```{r}
+write_rds(d_obs_filt,here::here('data','d_obs_ready_for_sdmTMB.rds'))
+```
+
+
 ## Designate Offsets
 
 While we are primarily interested in eulachon DNA concentration over space, time, and depth, we do not directly measure this concentration with our observations. Rather, we have replicate qPCR observations assocated with a water sample taken from a Niskin bottle and we have to account for the various modifications that have occurred during water sampling and processing. As part of this, we have a series of offsets that modify the true DNA concentration to affect what we observed in the qPCR. These [offsets](https://pbs-assess.github.io/sdmTMB/articles/model-description.html#offset-terms) will go into the model as log-transformed variables (because we will use a log link), and are scaling factors without estimated coefficients.
@@ -214,30 +219,32 @@ Create the mesh that will be the basis of our estimation---based on the spatial 
 NOTE: SEE THE BOTTOM OF THIS SCRIPT FOR SOME DIAGNOSTICS ON MESH COMPLEXITY
 
 ```{r}
-locs <- d_obs_filt %>%
-  distinct(year,station,utm.lon.km,utm.lat.km) %>%
-  st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
+# locs <- d_obs_filt %>%
+#   distinct(year,station,utm.lon.km,utm.lat.km) %>%
+#   st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
+# 
+# max.edge = diff(range(st_coordinates(locs)[,1]))/4
+# bound.outer = diff(range(st_coordinates(locs)[,1]))/3
+# 
+# domain <-fmesher::fm_nonconvex_hull(locs,
+#                               concave = -0.025,
+#                               convex = -0.025)
+# # I think we can use this to subset our prediction grid
+# 
+# inla_mesh <- fmesher::fm_mesh_2d_inla(
+#     #loc=locs[,c("utm.lon","utm.lat")],
+#     loc.domain = domain, # coordinates
+#     boundary=domain,
+#     max.edge = c(max.edge,max.edge*10), # max triangle edge length; inner and outer meshes
+#     offset = c(max.edge, bound.outer),  # inner and outer border widths
+#     #max.n.strict=100,#,
+#     min.angle=15,
+#     cutoff = 29.32207 # minimum triangle edge length (see mesh selection exercise below)
+#     )
 
-max.edge = diff(range(st_coordinates(locs)[,1]))/4
-bound.outer = diff(range(st_coordinates(locs)[,1]))/3
+# mesh <- make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"),mesh=inla_mesh) # this was decided based on a cross-validation exercise (see "Test Mesh Complexity" below)
 
-domain <-fmesher::fm_nonconvex_hull(locs,
-                              concave = -0.025,
-                              convex = -0.025)
-# I think we can use this to subset our prediction grid
-
-inla_mesh <- fmesher::fm_mesh_2d_inla(
-    #loc=locs[,c("utm.lon","utm.lat")],
-    loc.domain = domain, # coordinates
-    boundary=domain,
-    max.edge = c(max.edge,max.edge*10), # max triangle edge length; inner and outer meshes
-    offset = c(max.edge, bound.outer),  # inner and outer border widths
-    #max.n.strict=100,#,
-    min.angle=15,
-    cutoff = 29.32207 # minimum triangle edge length (see mesh selection exercise below)
-    )
-
-mesh <- make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"),mesh=inla_mesh) # this was decided based on a cross-validation exercise (see "Test Mesh Complexity" below)
+mesh <- make_mesh(d_obs_filt,xy_cols=c('utm.lon.km','utm.lat.km'),type='cutoff',cutoff=40)
 
 png(here('plots','selected_inla_mesh.png'),w=480,h=800,bg="transparent")
 plot(mesh)
@@ -296,27 +303,30 @@ Intercepts options to try
 
 We will do this one at a time, increasing slowly in complexity. In the second stage, we try different environmental covariates
 
-As a measure of model fit, we use 3-fold cross-validation with replacement. Using the same folds across all candidate models, we can pull the summed log likelihood from cross-validation as a measure of model skill.
+As a measure of model fit, we use cross-validation, with 10% of the data randomly withheld as a test set, and the rest used for training the model. Using the same cross-validation folds across all candidate models, we can pull the summed log likelihood from cross-validation as a measure of model skill.
 
 ## Cross Validation Folds
 
 ```{r}
 set.seed(8913)
 # clust <-sample(seq_len(3), size = nrow(d_obs_filt), replace = TRUE)
+
+clust <-sample(seq_len(2), size = nrow(d_obs_filt), replace = TRUE,prob = c(0.1,0.9))
+
 # clust <-as.integer(d_obs_filt$year==2019)+1# by year??
 # maybe do this by year and station, so we don't remove huge spatial blocks
 # hmm, and maybe we need an unbalanced sample.
-clust <- d_obs_filt %>% group_by(year,station) %>% 
-  mutate(cvclust=sample(seq_len(2),size=n(),replace=T)) %>% 
-  ungroup()
-
-clust %>% 
-  ggplot(aes(utm.lon.m,utm.lat.m,color=factor(cvclust)))+
-  geom_point()+
-  facet_grid(year~depth_cat)+
-  coord_equal()
-  
-clust <- clust %>% pull(cvclust)
+# clust <- d_obs_filt %>% group_by(year,station) %>% 
+#   mutate(cvclust=sample(seq_len(2),size=n(),replace=T)) %>% 
+#   ungroup()
+# 
+# clust %>% 
+#   ggplot(aes(utm.lon.m,utm.lat.m,color=factor(cvclust)))+
+#   geom_point()+
+#   facet_grid(year~depth_cat)+
+#   coord_equal()
+#   
+# clust <- clust %>% pull(cvclust)
 ```
 
 
@@ -346,7 +356,7 @@ f0
 paste("AIC:",AIC(f0))
 make_pred_obs_plots(f0,d,model_name="Fit0")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f0_cv <- sdmTMB_cv(
   Ct ~ 1+washed,
   data = d_obs_filt,
@@ -358,7 +368,7 @@ f0_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f0_cv$sum_loglik)
+paste("CVLL:",f0_cv$fold_loglik[[1]])
 ```
 
 First, a model with just one common spatial field, and a single intercept.
@@ -366,7 +376,7 @@ First, a model with just one common spatial field, and a single intercept.
 ```{r}
 tic("Fitting:")
 f1 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed,
+  Ct ~ 1+s(thetao_ln,k=3)+washed,
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -381,9 +391,9 @@ f1
 paste("AIC:",AIC(f1))
 make_pred_obs_plots(f1,d,model_name="Fit1")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f1_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed,
+  Ct ~ 1+s(thetao_ln,k=3)+washed,
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -393,9 +403,7 @@ f1_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f1_cv$sum_loglik)
-
-make_cond_plot(f1,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
+paste("CVLL:",f1_cv$fold_loglik[[1]])
 ```
 
 One spatial field, random intercept by depth category.
@@ -403,7 +411,7 @@ One spatial field, random intercept by depth category.
 ```{r}
 tic("Fitting:")
 f2 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -418,9 +426,9 @@ f2
 paste("AIC:",AIC(f2))
 make_pred_obs_plots(f2,d,model_name="Fit2")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f2_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -430,9 +438,8 @@ f2_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f2_cv$sum_loglik)
 
-make_cond_plot(f2,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
+paste("CVLL:",f2_cv$fold_loglik[[1]])
 
 ```
 
@@ -441,7 +448,7 @@ One spatial field, random intercept by year.
 ```{r}
 tic("Fitting:")
 f3 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -456,9 +463,9 @@ f3
 paste("AIC:",AIC(f3))
 make_pred_obs_plots(f3,d,model_name="Fit3")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f3_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -468,28 +475,7 @@ f3_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f3_cv$sum_loglik)
-
-make_cond_plot(f3,bathy.bottom.depth_ln,exp_var=T,saveplot=F)
-```
-
-```{r}
-# make_pred_obs_plots(f3,d,model_name="Fit3")
-# make_cond_plot(f3,thetao_ln,exp_var=T,saveplot=F)+labs(x="Temperature (C)",title="")+
-#   theme(axis.text=element_text(size=14),axis.title=element_text(size=16))
-# make_cond_plot(f3,bathy.bottom.depth_ln,exp_var=T,saveplot=F)+labs(x="Bottom Depth (m)",title="")+
-#   theme(axis.text=element_text(size=14),axis.title=element_text(size=16))
-# make_cond_plot(f3,so_ln,exp_var=T,saveplot=F)+labs(x="Salinity (psu)")
-# make_cond_plot(f3,k7_ln,exp_var=T,saveplot=F)+labs(x="Krill KDE",title="")+
-#   theme(axis.text=element_text(size=14),axis.title=element_text(size=16))
-# make_cond_plot(f3,nppv_ln,exp_var=T,saveplot=F)+labs(x="NPPV",title="")+
-#   theme(axis.text=element_text(size=14),axis.title=element_text(size=16))
-```
-
-
-```{r,fig.height=8,fig.width=6}
-# f3_abun_lat <- make_lat_abundance(f3)+theme(text=element_text(size=14))
-# ggsave(here('plots','f3_abun_by_lat.png'),f3_abun_lat,h=8,w=6,bg='white')
+paste("CVLL:",f3_cv$fold_loglik[[1]])
 ```
 
 One spatial field, random intercept by year and depth category
@@ -497,7 +483,7 @@ One spatial field, random intercept by year and depth category
 ```{r}
 tic("Fitting:")
 f4 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -512,9 +498,9 @@ f4
 paste("AIC:",AIC(f4))
 make_pred_obs_plots(f4,d,model_name="Fit4")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f4_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -524,7 +510,7 @@ f4_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f4_cv$sum_loglik)
+paste("CVLL:",f4_cv$fold_loglik[[1]])
 ```
 
 ## Spatial Field by Depth
@@ -542,7 +528,7 @@ d_obs_filt$d3 <- m[,3]
 ```{r}
 tic("Fitting:")
 f5 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed,
+  Ct ~ 1+s(thetao_ln,k=3)+washed,
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -558,9 +544,9 @@ f5
 paste("AIC:",AIC(f5))
 make_pred_obs_plots(f5,d,model_name="Fit5")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f5_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed,
+  Ct ~ 1+s(thetao_ln,k=3)+washed,
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -570,10 +556,8 @@ f5_cv <- sdmTMB_cv(
   family = stdcurve(),
   control = sdmTMBcontrol(stdcurve_df = d)
 )
-toc()
-paste("CVLL:",f5_cv$sum_loglik)
-# had difficulty partitioning between sigma_o (spatial field) and sigma_z (spatially varying coefficients)
-
+toc() # 27s on May 21, 2024
+paste("CVLL:",f5_cv$fold_loglik[[1]])
 ```
 
 Spatial field by depth category, random intercept by depth category. This one feels weird
@@ -581,7 +565,7 @@ Spatial field by depth category, random intercept by depth category. This one fe
 ```{r}
 tic("Fitting:")
 f6 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -597,9 +581,9 @@ f6
 paste("AIC:",AIC(f6))
 make_pred_obs_plots(f6,d,model_name="Fit6")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f6_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -610,7 +594,7 @@ f6_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f6_cv$sum_loglik)
+paste("CVLL:",f6_cv$fold_loglik[[1]])
 ```
 
 Spatial field by depth category, random intercept by year.
@@ -618,7 +602,7 @@ Spatial field by depth category, random intercept by year.
 ```{r}
 tic("Fitting:")
 f7 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -634,9 +618,9 @@ f7
 paste("AIC:",AIC(f7))
 make_pred_obs_plots(f7,d,model_name="Fit7")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f7_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -647,7 +631,7 @@ f7_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f7_cv$sum_loglik)
+paste("CVLL:",f7_cv$fold_loglik[[1]])
 ```
 
 
@@ -656,7 +640,7 @@ Spatial field by depth category, random intercept by depth and year
 ```{r}
 tic("Fitting:")
 f8 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -672,9 +656,9 @@ f8
 paste("AIC:",AIC(f8))
 make_pred_obs_plots(f8,d,model_name="Fit8")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f8_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -685,7 +669,7 @@ f8_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f8_cv$sum_loglik)
+paste("CVLL:",f8_cv$fold_loglik[[1]])
 ```
 
 ## Spatial Field by Year
@@ -695,7 +679,7 @@ Spatial field by year, single intercept.
 ```{r}
 tic("Fitting: ")
 f9 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed,
+  Ct ~ 1+s(thetao_ln,k=3)+washed,
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -711,9 +695,9 @@ f9
 paste("AIC:",AIC(f9))
 make_pred_obs_plots(f9,d,model_name="Fit9")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f9_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed,
+  Ct ~ 1+s(thetao_ln,k=3)+washed,
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -724,7 +708,7 @@ f9_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f9_cv$sum_loglik)
+paste("CVLL:",f9_cv$fold_loglik[[1]])
 ```
 
 Spatial field by year, random intercept by depth category.
@@ -732,7 +716,7 @@ Spatial field by year, random intercept by depth category.
 ```{r}
 tic("Fitting: ")
 f10 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -748,9 +732,9 @@ f10
 paste("AIC:",AIC(f10))
 make_pred_obs_plots(f10,d,model_name="Fit10")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f10_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -761,7 +745,7 @@ f10_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f10_cv$sum_loglik)
+paste("CVLL:",f10_cv$fold_loglik[[1]])
 ```
 
 Spatial field by year, random intercept by year.
@@ -769,7 +753,7 @@ Spatial field by year, random intercept by year.
 ```{r}
 tic("Fitting: ")
 f11 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -785,9 +769,9 @@ f11
 paste("AIC:",AIC(f11))
 make_pred_obs_plots(f11,d,model_name="Fit11")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f11_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -798,7 +782,7 @@ f11_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f11_cv$sum_loglik)
+paste("CVLL:",f11_cv$fold_loglik[[1]])
 ```
 
 Spatial field by year, random intercept by depth and year
@@ -806,7 +790,7 @@ Spatial field by year, random intercept by depth and year
 ```{r}
 tic("Fitting: ")
 f12 <- sdmTMB(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -822,9 +806,9 @@ f12
 paste("AIC:",AIC(f12))
 make_pred_obs_plots(f12,d,model_name="Fit12")
 
-tic("Calculating 3-fold cross-validation:")
+tic("Calculating cross-validation:")
 f12_cv <- sdmTMB_cv(
-  Ct ~ 1+s(bathy.bottom.depth_ln,k=3)+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
+  Ct ~ 1+s(thetao_ln,k=3)+washed+(1|yr_fct)+(1|depth_cat),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -835,40 +819,20 @@ f12_cv <- sdmTMB_cv(
   control = sdmTMBcontrol(stdcurve_df = d)
 )
 toc()
-paste("CVLL:",f12_cv$sum_loglik)
+paste("CVLL:",f12_cv$fold_loglik[[1]])
 ```
 
-Where we're at so far: models 1 through 4 converged with no issues, and relatively quickly. Models 5-8 seemingly had difficulty apportioning variance between the basic spatial field and the spatially varying coefficients for depth. They converged, but with significant warnings (see,e.g., `sanity(f8)`). Models 9-11 had similar issues estimating the spatial factors by year, and Model 12  not appropriately converge.
+Where we're at so far: models 0, 1, 3 and 4 converged with no issues, and relatively quickly, with Models 3 and 4 having the highest log-likelihood of the test set. Models 2, 5, and 6 seemingly had difficulty apportioning variance between the spatial fields and their varying representations of depth (i.e., intercepts or spatial fields by depth). They converged, but with significant warnings (see,e.g., `sanity(f5)`). Models 7-12 did not converge, which is expected to some degree as the models become more complex.
 
 # Conditional Effects
 
-We can look at the estimated effects of bottom depth, temperature, salinity and krill on our estimates of eulachon eDNA, conditional on all other variable being held at their means. For now, we use a range of models that converged, and whose diagnostic plots above (e.g. standard curve fits) look reasonable.
+We can look at the estimated effects of temperature on our estimates of eulachon eDNA, conditional on all other variable being held at their means. For now, we use a range of models that converged, and whose diagnostic plots above (e.g. standard curve fits) look reasonable.
 
-## Bottom Depth
-
-```{r}
-depth.cond <- purrr::map2_df(list(f1,f2,f3,f4,f5),c("f1","f2","f3","f4","f5"),function(m,n){
-  pr <- make_cond_plot(m,bathy.bottom.depth_ln,exp_var = T,return_dat=T,saveplot = F)
-  pr %>% mutate(model=n)
-})
-
-depth.cond.p <- depth.cond %>%   
-  ggplot(aes(bathy.bottom.depth_ln, exp(est),ymin=ymin,ymax=ymax,
-  fill=model
-)) +
-  geom_line() +
-  geom_ribbon(alpha = 0.4) +
-  scale_x_continuous(limits=c(0,800)) +
-  coord_cartesian(expand = F) +
-  facet_wrap(~model)+
-  labs(x = "Bottom Depth (m)", y = "eDNA conc.",title="Conditional Effect of Bottom Depth")
-depth.cond.p
-```
 
 ## Temperature
 
 ```{r}
-thetao.cond <- purrr::map2_df(list(f1,f2,f3,f4,f5),c("f1","f2","f3","f4","f5"),function(m,n){
+thetao.cond <- purrr::map2_df(list(f0,f1,f3,f4),c("f0","f1","f3","f4"),function(m,n){
   pr <- make_cond_plot(m,thetao_ln,exp_var = F,return_dat=T,saveplot = F)
   pr %>% mutate(model=n)
 })
@@ -887,9 +851,9 @@ thetao.cond.p
 
 # Variable Selection
 
-Now that we have tested the different model structures, we can choose a preferred model and then try different environmental covariates. We have temperature, depth, salinity, and then the krill metrics. We'll choose two of our highest-likelihood cross-validated fitted models for this exercise, which were Model 1 (single intercept and common spatial field across depths and years) and Model 2 (common spatial field, intercept by depth category). Two other, more complex models (Models 10 and 12) had slightly higher log-likelihood, but they had other convergence issues that invalidate them for further testing.
+Now that we have tested the different model structures, we can choose a preferred model and then try different environmental covariates. We have temperature, depth, salinity, and then the krill metrics. We'll choose three of our highest-likelihood cross-validated fitted models for this exercise, which were Model 1 (single intercept and common spatial field across depths and years) Model 3 (common spatial field, intercept by year), and Model 4 (common spatial field, intercepts by depth category and year).
 
-We use 3-fold cross-validation again to evaluate whether to include each variable. We try all combinations of temperature, depth, and salinity, but choose only one krill metric.
+We use cross-validation again to evaluate whether to include each variable. We try all combinations of temperature, depth, river input, and salinity, but choose only one krill metric.
 
 ## Abiotic variables
 
@@ -905,9 +869,9 @@ var_combs <- list(vars_to_test) %>% append(combn(vars_to_test,3,simplify = F)) %
 test_covariates_f1 <- function(v){
   f <- paste0("Ct~1+washed+",paste0("s(",v,",k=3)") %>% paste(collapse="+"))
   print(f)
-  tic("Calculating 3-fold ll:")
+  tic("Calculating ll:")
   f <- as.formula(f)
-  m_cv <- try(sdmTMB_cv(
+  fit <- try(sdmTMB_cv(
     formula=f,
     data = d_obs_filt,
     mesh = mesh,
@@ -918,21 +882,34 @@ test_covariates_f1 <- function(v){
     control = sdmTMBcontrol(stdcurve_df = d)
   ),
   silent=T)
-  if(class(m_cv)=='try-error'){
+  if(class(fit)=='try-error'){
+    print(paste('Error.'))
+    return(NA_real_)
+  }
+  # sanity checks
+  # s <- map(fit$models,function(x)sanity(x)$all_ok)
+  s <- sanity(fit$models[[1]])$all_ok
+  if(any(s==FALSE)){
     print(paste('Error.'))
     return(NA_real_)
   } else{
-  # print("CVLL:",m_cv$sum_loglik)
-    return(m_cv$sum_loglik)
+    # sum_loglik = fit %>% 
+    #   pluck('data') %>% 
+    #   dplyr::filter(cv_fold==2) %>% 
+    #   pluck('cv_loglik') %>% 
+    #   sum()
+  # print("CVLL:",fit$sum_loglik)
+    # return(fit$sum_loglik)
+    return(fit$fold_loglik[[1]])
   }
   toc()
 }
-test_covariates_f2 <- function(v){
-  f <- paste0("Ct~1+washed+(1|depth_cat)+",paste0("s(",v,",k=3)") %>% paste(collapse="+"))
+test_covariates_f3 <- function(v){
+  f <- paste0("Ct~1+washed+(1|yr_fct)+",paste0("s(",v,",k=3)") %>% paste(collapse="+"))
   print(f)
-  tic("Calculating 3-fold ll:")
+  tic("Calculating ll:")
   f <- as.formula(f)
-  m_cv <- try(sdmTMB_cv(
+  fit <- try(sdmTMB_cv(
     formula=f,
     data = d_obs_filt,
     mesh = mesh,
@@ -943,12 +920,63 @@ test_covariates_f2 <- function(v){
     control = sdmTMBcontrol(stdcurve_df = d)
   ),
   silent=T)
-  if(class(m_cv)=='try-error'){
+  if(class(fit)=='try-error'){
+    print(paste('Error.'))
+    return(NA_real_)
+  }
+  # sanity checks
+  # s <- map(fit$models,function(x)sanity(x)$all_ok)
+  s <- sanity(fit$models[[1]])$all_ok
+  if(any(s==FALSE)){
     print(paste('Error.'))
     return(NA_real_)
   } else{
+    # sum_loglik = fit %>% 
+    #   pluck('data') %>% 
+    #   dplyr::filter(cv_fold==2) %>% 
+    #   pluck('cv_loglik') %>% 
+    #   sum()
+    # return(fit$sum_loglik)
+    return(fit$fold_loglik[[1]])
+  }
+  toc()
+}
+
+test_covariates_f4 <- function(v){
+  f <- paste0("Ct~1+washed+(1|depth_cat)+(1|yr_fct)+",paste0("s(",v,",k=3)") %>% paste(collapse="+"))
+  print(f)
+  tic("Calculating ll:")
+  f <- as.formula(f)
+  fit <- try(sdmTMB_cv(
+    formula=f,
+    data = d_obs_filt,
+    mesh = mesh,
+    offset= "offsets_all",
+    spatial="on",
+    fold_ids=clust,
+    family = stdcurve(),
+    control = sdmTMBcontrol(stdcurve_df = d)
+  ),
+  silent=T)
+  if(class(fit)=='try-error'){
+    print(paste('Error.'))
+    return(NA_real_)
+  }
+  # sanity checks
+  # s <- map(fit$models,function(x)sanity(x)$all_ok)
+  s <- sanity(fit$models[[1]])$all_ok
+  if(any(s==FALSE)){
+    print(paste('Error.'))
+    return(NA_real_)
+  } else{
+    # sum_loglik = fit %>% 
+    #   pluck('data') %>% 
+    #   dplyr::filter(cv_fold==2) %>% 
+    #   pluck('cv_loglik') %>% 
+    #   sum()
   # print("CVLL:",m_cv$sum_loglik)
-    return(m_cv$sum_loglik)
+    # return(fit$sum_loglik)
+    return(fit$fold_loglik[[1]])
   }
   toc()
 }
@@ -957,19 +985,22 @@ test_covariates_f2 <- function(v){
 ```{r}
 # for Model 1
 f1_var_ll<-map_dbl(var_combs,test_covariates_f1)
-# for Model 2
-f2_var_ll<-map_dbl(var_combs,test_covariates_f2)
+# for Model 3
+f3_var_ll<-map_dbl(var_combs,test_covariates_f3)
+# for Model 4
+f4_var_ll<-map_dbl(var_combs,test_covariates_f4)
 ```
 
 ```{r}
-vsf1_p1 <- tibble(model_number=1:15,vars=var_combs,llf1=f1_var_ll,llf2=f2_var_ll) %>% 
-  pivot_longer(llf1:llf2,names_to="model_type",values_to = "ll") %>% 
+vsf1_p1 <- tibble(model_number=1:15,vars=var_combs,f1=f1_var_ll,f3=f3_var_ll,f4=f4_var_ll) %>% 
+  pivot_longer(f1:f4,names_to="model_type",values_to = "ll") %>% 
   ggplot(aes(model_number,ll,color=model_type))+
-  geom_point()+geom_line()+
-  geom_hline(yintercept=-4155.9951,linetype=2)+
+  geom_point(size=3)
+  geom_hline(yintercept=-310,linetype=2)+
   labs(x="Model Number",y="Sum LL")
 vsf1_p1
 ```
+The horizontal line in this plot indicates the original c-v log-likelihood of the temperature-only version of the simplest model. Only some of the variable selection models were higher-likelihood than this line. Interestingly, the "full" Model 4 that includes bathymetry, temperature, salinty, and river input was well-supported; but the "best" model according to this exercise is the temperature-only version of Model 3.
 
 ## Krill Variables
 
@@ -982,30 +1013,31 @@ kvars_to_test <- paste0("k",1:7,"_ln")
 kvars_combs <- map(kvars_to_test,~c(.,"thetao_ln"))
 
 f1_kvar_ll<-map_dbl(kvars_combs,test_covariates_f1)
-f2_kvar_ll<-map_dbl(kvars_combs,test_covariates_f2)
+f3_kvar_ll<-map_dbl(kvars_combs,test_covariates_f3)
+f4_kvar_ll<-map_dbl(kvars_combs,test_covariates_f4)
 
 #plot
-vs2_p <- tibble(model_number=1:7,vars=kvars_combs,llf1=f1_kvar_ll,llf2=f2_kvar_ll) %>% 
-  pivot_longer(llf1:llf2,names_to="model_type",values_to = "ll") %>% 
+vs2_p <- tibble(model_number=1:7,vars=kvars_combs,f1=f1_kvar_ll,f3=f3_kvar_ll,f4=f4_kvar_ll) %>% 
+  pivot_longer(f1:f4,names_to="model_type",values_to = "ll") %>% 
   ggplot(aes(model_number,ll,color=model_type))+
-  geom_point()+geom_line()+
-  geom_hline(yintercept=-4155.9951,linetype=2)+
+  geom_point(size=3)+
+  geom_hline(yintercept=-306.5311,linetype=2)+
   labs(x="Model Number",y="Sum LL")
 vs2_p
 ```
 
-These actually improve our cross-validation likelihood values, particularly variables k4 and k5.
+These actually improve our cross-validation likelihood values, particularly variables k2 and k3. Now, the highest-likelihood model is Model 4, with `k2_ln` and `thetao_ln` as predictors.
 
 # Chosen Model
 
-Here is the final selected model and variables. Fit the model and then make output plots. Using k4 results in a large standard error for the common spatial field (sigma_o), while k5 has no `sanity` issues. So we'll use k5 as the krill variable.
+Here is the final selected model and variables. We fit the final version of the model and then make output plots.
 
 ```{r}
 tic("Fitting:")
 m <- sdmTMB(
-  Ct ~ 1+s(thetao_ln,k=3)+s(k5_ln,k=3)+washed,
+  Ct ~ 1+s(thetao_ln,k=3)+s(k2_ln,k=3)+washed+(1|depth_cat)+(1|yr_fct),
   data = d_obs_filt,
-  mesh = meshestest[[5]],
+  mesh = mesh,
   offset= "offsets_all",
   spatial="on",
   spatiotemporal = "off",
@@ -1024,16 +1056,16 @@ Choose temperature and k4; this is what the conditional effects look like in the
 
 ```{r,fig.height=6,fig.width=4}
 mconds_thetao <- make_cond_plot(m,thetao_ln,exp_var=T,saveplot=F)
-mconds_k5 <- make_cond_plot(m,k5_ln,exp_var=T,saveplot=F)
+mconds_k2 <- make_cond_plot(m,k2_ln,exp_var=T,saveplot=F)
 
-mod1_covar_cond_effs <- cowplot::plot_grid(mconds_thetao,mconds_k5,nrow=2)
-ggsave(here('plots','Model 1 Conditional Covariate Effcts.png'),mod1_covar_cond_effs,w=4,h=6,bg='white')
+mod1_covar_cond_effs <- cowplot::plot_grid(mconds_thetao,mconds_k2,nrow=2)
+ggsave(here('plots','Model 1 Conditional Covariate Effects.png'),mod1_covar_cond_effs,w=4,h=6,bg='white')
 ```
 
 
 # Index of Abundance
 
-Let's just sum up the predictions by year to create an index of abundance. A simple sum should work relatively well here since we are using a regular prediction grid (i.e., all the spatial cells are the same area).
+Let's just sum up the predictions by year to create an index of abundance. A simple sum should work relatively well here since we are using a regular prediction grid (i.e., all the spatial cells are the same area). We also can visualize this index in relation to river discharge
 
 ```{r}
 m_abun <- make_abun_index(m)+theme(axis.text=element_text(size=12))
@@ -1068,14 +1100,14 @@ Can also make maps of the covariates, just so we know what we're working with.
 thetao_plot <- make_map(grid.pred,thetao)+
     scale_fill_viridis(option="C")+
   labs(title="Temperature")
-k5_plot <- make_map(grid.pred,k5_ln)+
+k2_plot <- make_map(grid.pred,k2_ln)+
   scale_fill_viridis(option="C")+
-  labs(title="Krill Metric 5 (log)")
+  labs(title="Krill Metric 2 (log)")
 thetao_plot
-k5_plot
+k2_plot
 
 ggsave(here('plots','temperature_by_depth_year_map.png'),thetao_plot,w=6,h=10)
-ggsave(here('plots','krill_metric5_by_depth_year_map.png'),k5_plot,w=6,h=10)
+ggsave(here('plots','krill_metric2_by_depth_year_map.png'),k2_plot,w=6,h=10)
 ```
 
 
@@ -1151,30 +1183,30 @@ make_map_bathy(m.preds,est)+
 ggsave(here('plots','Model 1 California.png'),w=6,h=5,bg="white")
 
 # quantiles?
-m.preds %>% 
-  arrange(est) %>% 
-  mutate(quantest=ntile(est,100)) %>% 
-  mutate(quantcut=cut(quantest,10)) %>% 
-  mutate(top5=ifelse(quantest>=95,T,F)) %>% 
-  make_map(top5)+
-  scale_fill_manual(values=c('gray20','#BD3786FF'))+
-  # scale_fill_viridis_c()+
-    # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
-  labs(title="Model 1",fill="Top 5% (eDNA)")
 
+# m.preds %>% 
+#   arrange(est) %>% 
+#   mutate(quantest=ntile(est,100)) %>% 
+#   mutate(quantcut=cut(quantest,20)) %>% 
+#   make_map(quantcut)+
+#   ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])+
+#   scale_fill_viridis(option='D',discrete=T)+
+#     # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
+#   labs(title="Model 1",fill="Quantile (eDNA)")
 m.preds %>% 
   arrange(est) %>% 
-  mutate(quantest=ntile(est,100)) %>% 
-  mutate(quantcut=cut(quantest,10)) %>% 
-  make_map(quantcut)+
-  scale_fill_viridis(option='C',discrete=T)+
+  mutate(quantest=percent_rank(est)*100) %>% 
+  make_map(quantest)+
+  ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])+
+  scale_fill_viridis(option='D',discrete=F)+
     # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
   labs(title="Model 1",fill="Quantile (eDNA)")
+ggsave(here('plots','Model 1 Quantiles WA and OR.png'),w=6,h=8,bg="white")
 
 #presence/absence
 m.pa.map <- make_presence_absence_map(m)[[2]]+labs(x="",y="")+
   ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])
-ggsave(here('plots','Model 1 presence absence.png'),w=6,h=5,bg="white")
+ggsave(here('plots','Model 1 presence absence.png'),m.pa.map,w=6,h=5,bg="white")
 ```
 
 # Post-hoc Comparison
@@ -1197,44 +1229,53 @@ One thing that seems to have an effect on our fits is the configuration of the I
 
 ```{r}
 # we are using a combined INLA/sdmTMB workflow to make these meshes. We will vary the "cutoff", which determines the minimum triangle edge length, and in practice determines the number of vertices in the mesh
-locs <- d_obs_filt %>%
-  distinct(year,station,utm.lon.km,utm.lat.km) %>%
-  st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
-
-max.edge = diff(range(st_coordinates(locs)[,1]))/4
-bound.outer = diff(range(st_coordinates(locs)[,1]))/3
-
-domain <-fmesher::fm_nonconvex_hull(locs,
-                              concave = -0.025,
-                              convex = -0.025)
-make_test_mesh <- function(test_cutoff){
-  testmesh <- fmesher::fm_mesh_2d_inla(
-    #loc=locs[,c("utm.lon","utm.lat")],
-    loc.domain = domain, # coordinates
-    boundary=domain,
-    max.edge = c(max.edge,max.edge*2), # max triangle edge length; inner and outer meshes
-    offset = c(max.edge, bound.outer),  # inner and outer border widths
-    #max.n.strict=100,#,
-    min.angle=15,
-    cutoff = test_cutoff # minimum triangle edge length
-    )
-  make_mesh(d_obs_filt,c("utm.lon.km","utm.lat.km"),mesh=testmesh)
-}
-
-# let's make a series of meshes of increasing complexity, then fit our model and test its likelihood
-cutoffs_to_try <- max.edge/seq(1.5,8,by=0.5)
-meshes <- map(cutoffs_to_try,make_test_mesh)
+# locs <- d_obs_filt %>%
+#   distinct(year,station,utm.lon.km,utm.lat.km) %>%
+#   st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
+# 
+# max.edge = diff(range(st_coordinates(locs)[,1]))/4
+# bound.outer = diff(range(st_coordinates(locs)[,1]))/3
+# 
+# domain <-fmesher::fm_nonconvex_hull(locs,
+#                               concave = -0.025,
+#                               convex = -0.025)
+# make_test_mesh <- function(test_cutoff){
+#   testmesh <- fmesher::fm_mesh_2d_inla(
+#     #loc=locs[,c("utm.lon","utm.lat")],
+#     loc.domain = domain, # coordinates
+#     boundary=domain,
+#     max.edge = c(max.edge,max.edge*2), # max triangle edge length; inner and outer meshes
+#     offset = c(max.edge, bound.outer),  # inner and outer border widths
+#     #max.n.strict=100,#,
+#     min.angle=15,
+#     cutoff = test_cutoff # minimum triangle edge length
+#     )
+#   make_mesh(d_obs_filt,c("utm.lon.km","utm.lat.km"),mesh=testmesh)
+# }
+# 
+# # let's make a series of meshes of increasing complexity, then fit our model and test its likelihood
+# cutoffs_to_try <- seq(2,20,by=2)
+# meshes <- map(cutoffs_to_try,make_test_mesh)
 # knots_to_try <- seq(50,175,by=25)
 # meshes <- map(knots_to_try,~make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"),n_knots=.x))
-map(meshes,plot)
+# map(meshes,plot)
 ```
 
-Now try to fit the same model on each mesh
+```{r}
+cutoffs_to_try = seq(10,160,by=10)
+meshestest <- map(cutoffs_to_try,function(cuts) make_mesh(d_obs_filt,xy_cols=c('utm.lon.km','utm.lat.km'),type='cutoff',cutoff=cuts))
+```
+
+
+Now try to fit the same model on each mesh. Because we've noticed a tradeoff in covariate number and mesh complexity (including lots of non-convergence if a mesh is too complex combined with many predictors), we test this with a model that includes 3 environmental covariates.
 
 ```{r}
 calc_mesh_ll <- function(testmesh){
+  meshn=testmesh$mesh$n
   fit <- try(sdmTMB_cv(
-    Ct ~ 1+s(thetao_ln,k=3)+washed,
+    # Ct ~ 1+thetao_ln + I(thetao_ln^2)+washed,
+    # Ct ~ 1+s(thetao_ln,k=3)+washed,
+    Ct ~ 1+washed+s(thetao_ln,k=3)+s(bathy.bottom.depth_ln,k=3)+s(k5_ln,k=3),
     data = d_obs_filt,
     mesh = testmesh,
     offset= "offsets_all",
@@ -1249,32 +1290,36 @@ calc_mesh_ll <- function(testmesh){
     return(NA_real_)
   }
   # sanity checks
-  s <- map(fit$models,function(x)sanity(x)$all_ok)
-  # s <- sanity(fit$models[[2]])$all_ok
+  # s <- map(fit$models,function(x)sanity(x)$all_ok)
+  s <- sanity(fit$models[[1]])$all_ok
   if(any(s==FALSE)){
-    print(paste('Error.'))
+    print(paste("ERROR: Mesh with", meshn,'vertices had issues.'))
     return(NA_real_)
   } else{
+    print(paste("Mesh with", meshn, "vertices worked."))
     # sum_loglik = fit %>% 
     #   pluck('data') %>% 
     #   dplyr::filter(cv_fold==2) %>% 
     #   pluck('cv_loglik') %>% 
     #   sum()
   # print("CVLL:",m_cv$sum_loglik)
-    return(fit$sum_loglik)
+    # return(fit$sum_loglik)
+    return(fit$fold_loglik[[1]])
   }
 }
+```
 
+
+```{r}
 tic("CV mesh analysis")
-meshes.ll <- map_dbl(meshes,calc_mesh_ll)
+meshes.ll.test <- map_dbl(meshestest,calc_mesh_ll)
 toc()
-
 ```
 
 Plot the relationship between mesh complexity and the 3-fold CV likelihood. Knots is one way to measure, but there's also total vertices (`mesh$mesh$n`)
 
 ```{r}
-mesh.comparison <- tibble(cutoff=cutoffs_to_try,sumll=meshes.ll) %>% 
+mesh.comparison <- tibble(cutoff=cutoffs_to_try,sumll=meshes.ll.test) %>% 
   ggplot(aes(cutoff,sumll))+
   geom_line()+
   geom_point()+
@@ -1283,58 +1328,7 @@ mesh.comparison <- tibble(cutoff=cutoffs_to_try,sumll=meshes.ll) %>%
   labs(x="Minimum Interior Edge Length",y="Summed Log Likelihood")
 mesh.comparison
 
-mesh.comparison2 <- tibble(cutoff=cutoffs_to_try,sumll=meshes.ll) %>% 
-  mutate(nverts=map_dbl(meshes,~.$mesh$n)) %>% 
-  ggplot(aes(nverts,sumll))+
-  geom_line()+
-  geom_point()+
-  geom_smooth(se=F)+
-  # stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1,se=F)+
-  scale_x_continuous(limits=c(100,400),breaks=seq(100,400,by=100))+
-  labs(x="Number of Vertices",y="Summed Log Likelihood")
-mesh.comparison2
-
-meshes_table <- tibble(cutoff=cutoffs_to_try,sumll=meshes.ll) %>% 
-  mutate(nverts=map_dbl(meshes,~.$mesh$n))
-
-meshes.edges.nverts <- meshes_table%>% 
-  ggplot(aes(cutoffs_to_try,nverts))+
-  # geom_line()+
-  geom_point()+
-  labs(y="Number of Vertices",x="Minimum Interior Edge Length")
-
-meshes.p <-plot_grid(mesh.comparison,mesh.comparison2,nrow=1)
-
-meshes.edges.nverts
-meshes.p
-
-ggsave(here('plots','mesh_complexity_test.png'),meshes.p,h=4,w=7,bg='white')
-```
-
-Looks like one of the more complex meshes (15.6 minimum edge length, 317 vertices) provides the highest likelihood model.
-
-
-# Scratch
-
-```{r}
-# try simpler meshes
-meshestest <- map(seq(10,100,by=10),function(cuts) make_mesh(d_obs_filt,xy_cols=c('utm.lon.km','utm.lat.km'),type='cutoff',cutoff=cuts))
-
-# let's make a series of meshes of increasing complexity, then fit our model and test its likelihood
-meshes.ll.test <- map_dbl(meshestest,calc_mesh_ll)
-```
-
-```{r}
-mesh.comparison <- tibble(cutoff=seq(10,100,by=10),sumll=meshes.ll.test) %>% 
-  ggplot(aes(cutoff,sumll))+
-  geom_line()+
-  geom_point()+
-  # stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1,se=F)+
-  geom_smooth(se=F)+
-  labs(x="Minimum Interior Edge Length",y="Summed Log Likelihood")
-mesh.comparison
-
-mesh.comparison2 <- tibble(cutoff=seq(10,100,by=10),sumll=meshes.ll.test) %>% 
+mesh.comparison2 <- tibble(cutoff=cutoffs_to_try,sumll=meshes.ll.test) %>% 
   mutate(nverts=map_dbl(meshestest,~.$mesh$n)) %>% 
   ggplot(aes(nverts,sumll))+
   geom_line()+
@@ -1345,7 +1339,59 @@ mesh.comparison2 <- tibble(cutoff=seq(10,100,by=10),sumll=meshes.ll.test) %>%
   labs(x="Number of Vertices",y="Summed Log Likelihood")
 mesh.comparison2
 
-meshes_table <- tibble(cutoffs_to_try=seq(10,100,by=10),sumll=meshes.ll.test) %>% 
+meshes_table <- tibble(cutoff=cutoffs_to_try,sumll=meshes.ll.test) %>% 
+  mutate(nverts=map_dbl(meshestest,~.$mesh$n))
+
+meshes.edges.nverts <- meshes_table%>% 
+  ggplot(aes(cutoff,nverts))+
+  # geom_line()+
+  geom_point()+
+  labs(y="Number of Vertices",x="Minimum Interior Edge Length")
+
+meshes.p <-plot_grid(mesh.comparison,mesh.comparison2,nrow=1)
+
+meshes.edges.nverts
+meshes.p
+
+# ggsave(here('plots','mesh_complexity_test.png'),meshes.p,h=4,w=7,bg='white')
+```
+After testing multiple meshes with models of different complexity in covariates, it seems that the mesh with 118 knots and a cutoff (minimum interior edge length) of 40km works well for both simple and slightly more complex models, and therefore represents a balance of our needs here. We choose to move forward with this mesh.
+
+# Scratch
+
+## Meshes
+
+```{r}
+# try simpler meshes
+meshestest <- map(c(seq(2,10,by=2),seq(20,180,by=20)),function(cuts) make_mesh(d_obs_filt,xy_cols=c('utm.lon.km','utm.lat.km'),type='cutoff',cutoff=cuts))
+
+# let's make a series of meshes of increasing complexity, then fit our model and test its likelihood
+meshes.ll.test <- map_dbl(meshestest,calc_mesh_ll)
+```
+
+```{r}
+test_cuts <- c(seq(2,10,by=2),seq(20,180,by=20))
+mesh.comparison <- tibble(cutoff=test_cuts,sumll=c(meshes.ll.test)) %>% 
+  ggplot(aes(cutoff,sumll))+
+  geom_line()+
+  geom_point()+
+  # stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1,se=F)+
+  geom_smooth(se=F)+
+  labs(x="Minimum Interior Edge Length",y="Summed Log Likelihood")
+mesh.comparison
+
+mesh.comparison2 <- tibble(cutoff=test_cuts,sumll=meshes.ll.test) %>% 
+  mutate(nverts=map_dbl(meshestest,~.$mesh$n)) %>% 
+  ggplot(aes(nverts,sumll))+
+  geom_line()+
+  geom_point()+
+  geom_smooth(se=F)+
+  # stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1,se=F)+
+  # scale_x_continuous(limits=c(100,400),breaks=seq(100,400,by=100))+
+  labs(x="Number of Vertices",y="Summed Log Likelihood")
+mesh.comparison2
+
+meshes_table <- tibble(cutoffs_to_try=test_cuts,sumll=meshes.ll.test) %>% 
   mutate(nverts=map_dbl(meshestest,~.$mesh$n))
 
 meshes.edges.nverts <- meshes_table%>% 
@@ -1360,4 +1406,34 @@ meshes.edges.nverts
 meshes.p
 ```
 
+```{r}
+#trying priors on standard curves
+# k <- tibble(par=names(f4$sd_report$value),val=f4$sd_report$value)
+ftest <- sdmTMB(
+  Ct ~ 1+thetao_ln + I(thetao_ln^2)+washed,
+  data = d_obs_filt,
+  mesh = meshestest[[6]],
+  offset= "offsets_all",
+  spatial="on",
+  spatiotemporal = "off",
+  time=NULL,
+  family = stdcurve(),
+  control = sdmTMBcontrol(stdcurve_df = d)
+)
+make_cond_plot(ftest,thetao_ln)
+```
+
+## Map Transformations
+
+```{r}
+test<- m.preds %>% 
+  arrange(est) %>% 
+  mutate(quantest=percent_rank(est)) %>% 
+  make_map(quantest)+
+  ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])+
+  scale_fill_viridis(option='D',discrete=F)+
+    # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
+  labs(title="Model 1",fill="Quantile (eDNA)")
+test
+```
 

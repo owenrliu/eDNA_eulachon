@@ -699,6 +699,97 @@ grid.pred.k %>%
 
 
 ```
+For some krill metrics, this is harder because we have to match in 3D
+
+```{r}
+klocs19_50 <- kdf %>% 
+  filter(Layer_depth_min==50) %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2019))
+klocs19_150 <- kdf %>% 
+  filter(Layer_depth_min==150) %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2019))
+klocs21_50 <- kdf %>% 
+  filter(Layer_depth_min==50) %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2021))
+klocs21_150 <- kdf %>% 
+  filter(Layer_depth_min==50) %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2021))
+
+# find5 nearest neighbors to each grid cell and depth category
+k_gr_match_2019_50 <- st_nn(grlocs.pred19,klocs19_50,k=5,returnDist = T)
+k_gr_match_2019_150 <- st_nn(grlocs.pred19,klocs19_150,k=5,returnDist = T)
+k_gr_match_2021_50 <- st_nn(grlocs.pred19,klocs21_50,k=5,returnDist = T)
+k_gr_match_2021_150 <- st_nn(grlocs.pred19,klocs21_150,k=5,returnDist = T)
+
+# Now we should be able to calculate k1,k2, etc. on the pred grid
+gr_krill_k2_19_0 <- purrr::map2_dbl(k_gr_match_2019_50$nn,k_gr_match_2019_50$dist,function(idx,d){
+  distweight=1/d
+  weighted.mean(klocs19_50$NASC[idx],distweight)
+})
+gr_krill_k2_19_50 <- gr_krill_k2_19_0
+gr_krill_k2_19_150 <- purrr::map2_dbl(k_gr_match_2019_150$nn,k_gr_match_2019_150$dist,function(idx,d){
+  distweight=1/(d^2)
+  weighted.mean(klocs19_150$NASC[idx],distweight)
+})
+gr_krill_k2_21_0 <- purrr::map2_dbl(k_gr_match_2021_50$nn,k_gr_match_2021_50$dist,function(idx,d){
+  distweight=1/d
+  weighted.mean(klocs21_50$NASC[idx],distweight)
+})
+gr_krill_k2_21_50 <- gr_krill_k2_21_0
+gr_krill_k2_21_150 <- purrr::map2_dbl(k_gr_match_2021_150$nn,k_gr_match_2021_150$dist,function(idx,d){
+  distweight=1/(d^2)
+  weighted.mean(klocs21_150$NASC[idx],distweight)
+})
+
+# sort and coalesce
+gridk2.19 <- grlocs.pred19 %>% 
+  mutate(k2_0=gr_krill_k2_19_0,k2_150=gr_krill_k2_19_150)
+gridk2.19$k2_150[gridk2$depth_cat!=150] <- NA
+gridk2.19$k2_0[gridk2$depth_cat==150] <- NA
+gridk2.19 <- gridk2.19 %>% mutate(k2=coalesce(k2_0,k2_150)) %>% 
+
+# sort and coalesce
+gridk2.21 <- grlocs.pred21 %>% 
+  mutate(k2_0=gr_krill_k2_21_0,k2_150=gr_krill_k2_21_150)
+gridk2.21$k2_150[gridk2$depth_cat!=150] <- NA
+gridk2.21$k2_0[gridk2$depth_cat==150] <- NA
+gridk2.21 <- gridk2.21 %>% mutate(k2=coalesce(k2_0,k2_150))
+```
+
+```{r}
+grid.pred.k19 <- grlocs.pred19 %>% mutate(k4=gr_krill_k4_19,k5=gr_krill_k5_19,k2=gridk2.19$k2)
+grid.pred.k21 <- grlocs.pred21 %>% mutate(k4=gr_krill_k4_21,k5=gr_krill_k5_21,k2=gridk2.21$k2)
+grid.pred.k <- bind_rows(grid.pred.k19,grid.pred.k21)%>% st_set_geometry(NULL)
+
+grid.pred.k %>% 
+  ggplot(aes(x,y,fill=k4))+
+  geom_raster()+
+  coord_equal()+
+  facet_wrap(~year)+
+  scale_fill_viridis(option="magma")
+
+grid.pred.k %>% 
+  ggplot(aes(x,y,fill=k5))+
+  geom_raster()+
+  coord_equal()+
+  facet_wrap(~year)+
+  scale_fill_viridis(option="magma")
+
+grid.pred.k %>% 
+  ggplot(aes(x,y,fill=k2))+
+  geom_raster()+
+  coord_equal()+
+  facet_grid(depth_cat~year)+
+  scale_fill_viridis(option="magma",trans='log10')
+```
 
 
 # Save 
@@ -713,7 +804,7 @@ kfit.preds.out <- kfit.preds %>%
   filter(Year %in% c(2019,2021)) %>% 
   dplyr::select(x:bathy.bottom.depth,k6_ln=est,year=Year)
 write_rds(kfit.preds.out,here('model output','krill_sdm_matched_to_pred_grid.rds'))
-write_rds(grid.pred.k,here('model output','krill_k4_k5_matched_to_pred_grid.rds'))
+write_rds(grid.pred.k,here('model output','krill_k2_k4_k5_matched_to_pred_grid.rds'))
 ```
 
 ```{r}
