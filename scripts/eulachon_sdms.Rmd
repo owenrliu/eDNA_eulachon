@@ -144,7 +144,7 @@ rmarkdown::render(here::here('scripts','krill_nasc_matching.Rmd'),quiet=TRUE)
 edna_krill_metrics <- read_rds(here('model output','edna_krill_metrics.rds')) %>% 
   filter(depth_cat %in% c(0,50,150))
   
-d_obs_filt <- d_obs_filt %>% bind_cols(edna_krill_metrics %>% dplyr::select(k1:k7))
+d_obs_filt <- d_obs_filt %>% bind_cols(edna_krill_metrics %>% dplyr::select(k1:k6))
 ```
 
 ### River discharge data
@@ -166,7 +166,7 @@ d_obs_filt <- d_obs_filt %>%
   # make bottom depth positive
   mutate(bathy.bottom.depth=-bathy.bottom.depth) %>% 
   # log covariates
-  mutate(across(c(so,thetao,bathy.bottom.depth,k1,k2,k3,k4,k5,k6,k7,chl,no3,nppv,o2,phyc,river_input),list(ln=function(x){
+  mutate(across(c(so,thetao,bathy.bottom.depth,k1,k2,k3,k4,k5,k6,chl,no3,nppv,o2,phyc,river_input),list(ln=function(x){
     x[x==0]<-1
     log(x)
     })))
@@ -1000,6 +1000,7 @@ vsf1_p1 <- tibble(model_number=1:15,vars=var_combs,f1=f1_var_ll,f3=f3_var_ll,f4=
   labs(x="Model Number",y="Sum LL")
 vsf1_p1
 ```
+
 The horizontal line in this plot indicates the original c-v log-likelihood of the temperature-only version of the simplest model. Only some of the variable selection models were higher-likelihood than this line. Interestingly, the "full" Model 4 that includes bathymetry, temperature, salinty, and river input was well-supported; but the "best" model according to this exercise is the temperature-only version of Model 3.
 
 ## Krill Variables
@@ -1008,7 +1009,7 @@ Do the same process as above, but choosing the temperature-only model and trying
 
 ```{r}
 # Formulas to try (with different variables)
-kvars_to_test <- paste0("k",1:7,"_ln")
+kvars_to_test <- paste0("k",1:6,"_ln")
 
 kvars_combs <- map(kvars_to_test,~c(.,"thetao_ln"))
 
@@ -1017,7 +1018,7 @@ f3_kvar_ll<-map_dbl(kvars_combs,test_covariates_f3)
 f4_kvar_ll<-map_dbl(kvars_combs,test_covariates_f4)
 
 #plot
-vs2_p <- tibble(model_number=1:7,vars=kvars_combs,f1=f1_kvar_ll,f3=f3_kvar_ll,f4=f4_kvar_ll) %>% 
+vs2_p <- tibble(model_number=1:6,vars=kvars_combs,f1=f1_kvar_ll,f3=f3_kvar_ll,f4=f4_kvar_ll) %>% 
   pivot_longer(f1:f4,names_to="model_type",values_to = "ll") %>% 
   ggplot(aes(model_number,ll,color=model_type))+
   geom_point(size=3)+
@@ -1025,8 +1026,7 @@ vs2_p <- tibble(model_number=1:7,vars=kvars_combs,f1=f1_kvar_ll,f3=f3_kvar_ll,f4
   labs(x="Model Number",y="Sum LL")
 vs2_p
 ```
-
-These actually improve our cross-validation likelihood values, particularly variables k2 and k3. Now, the highest-likelihood model is Model 4, with `k2_ln` and `thetao_ln` as predictors.
+These actually improve our cross-validation likelihood values, particularly variables k3, k4, and k5. Now, the highest-likelihood model is Model 3, with `k4_ln` and `thetao_ln` as predictors.
 
 # Chosen Model
 
@@ -1035,7 +1035,7 @@ Here is the final selected model and variables. We fit the final version of the 
 ```{r}
 tic("Fitting:")
 m <- sdmTMB(
-  Ct ~ 1+s(thetao_ln,k=3)+s(k2_ln,k=3)+washed+(1|depth_cat)+(1|yr_fct),
+  Ct ~ 1+s(thetao_ln,k=3)+s(k4_ln,k=3)+washed+(1|yr_fct),
   data = d_obs_filt,
   mesh = mesh,
   offset= "offsets_all",
@@ -1047,7 +1047,7 @@ m <- sdmTMB(
 )
 toc()
 m
-make_pred_obs_plots(m,d,model_name="Model 1")
+make_pred_obs_plots(m,d,model_name="Model 1",saveplots = T,savetype = 'png')
 ```
 
 ## Conditional Plots
@@ -1056,9 +1056,9 @@ Choose temperature and k4; this is what the conditional effects look like in the
 
 ```{r,fig.height=6,fig.width=4}
 mconds_thetao <- make_cond_plot(m,thetao_ln,exp_var=T,saveplot=F)
-mconds_k2 <- make_cond_plot(m,k2_ln,exp_var=T,saveplot=F)
+mconds_k4 <- make_cond_plot(m,k4_ln,exp_var=T,saveplot=F)
 
-mod1_covar_cond_effs <- cowplot::plot_grid(mconds_thetao,mconds_k2,nrow=2)
+mod1_covar_cond_effs <- cowplot::plot_grid(mconds_thetao,mconds_k4,nrow=2)
 ggsave(here('plots','Model 1 Conditional Covariate Effects.png'),mod1_covar_cond_effs,w=4,h=6,bg='white')
 ```
 
@@ -1100,14 +1100,14 @@ Can also make maps of the covariates, just so we know what we're working with.
 thetao_plot <- make_map(grid.pred,thetao)+
     scale_fill_viridis(option="C")+
   labs(title="Temperature")
-k2_plot <- make_map(grid.pred,k2_ln)+
-  scale_fill_viridis(option="C")+
-  labs(title="Krill Metric 2 (log)")
+k4_plot <- make_map(grid.pred,log(k4))+
+  scale_fill_viridis(option="C",na.value="grey90")+
+  labs(title="Krill Metric 4 (log)")
 thetao_plot
-k2_plot
+k4_plot
 
 ggsave(here('plots','temperature_by_depth_year_map.png'),thetao_plot,w=6,h=10)
-ggsave(here('plots','krill_metric2_by_depth_year_map.png'),k2_plot,w=6,h=10)
+ggsave(here('plots','krill_metric2_by_year_map.png'),k4_plot,w=6,h=10)
 ```
 
 
@@ -1196,7 +1196,7 @@ ggsave(here('plots','Model 1 California.png'),w=6,h=5,bg="white")
 m.preds %>% 
   arrange(est) %>% 
   mutate(quantest=percent_rank(est)*100) %>% 
-  make_map(quantest)+
+  make_map_bathy(quantest)+
   ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])+
   scale_fill_viridis(option='D',discrete=F)+
     # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
@@ -1208,6 +1208,15 @@ m.pa.map <- make_presence_absence_map(m)[[2]]+labs(x="",y="")+
   ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])
 ggsave(here('plots','Model 1 presence absence.png'),m.pa.map,w=6,h=5,bg="white")
 ```
+```{r}
+#depth-depth plot?
+depth_depth_p <- m.preds %>% 
+  filter(bathy.bottom.depth<1500) %>% 
+  ggplot(aes(bathy.bottom.depth,exp(est),color=factor(year)))+
+  geom_point()+facet_wrap(~depth_cat)
+depth_depth_p
+```
+
 
 # Post-hoc Comparison
 

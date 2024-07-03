@@ -54,6 +54,8 @@ grid.pred150 <- grid.pred %>% filter(bathy.bottom.depth >= 100) %>% mutate(depth
 grid.predz <- bind_rows(grid.pred0,grid.pred50,grid.pred150) %>% 
   mutate(depth_fct=as.factor(depth_cat))
 
+write_rds(grid.predz,here('data','prediction_grid_5km_3depths_no_covars.rds'))
+
 #background map
 coast <- ne_states(country='United States of America',returnclass = 'sf') %>% 
   filter(name %in% c('California','Oregon','Washington','Nevada')) %>%
@@ -132,10 +134,12 @@ grid_glorys_join <- grid_glorys_join %>%
 
 # the last value we have to join is for krill
 # see krill matching script for details
-krill_preds <- read_rds(here('model output','krill_sdm_matched_to_pred_grid.rds'))
-k4 <- read_rds(here('model output','krill_k2_k4_k5_matched_to_pred_grid.rds')) %>% dplyr::select(-depth_cat)
+# krill_preds <- read_rds(here('model output','krill_sdm_matched_to_pred_grid.rds'))
+k4 <- read_rds(here('model output','krill_k2_k4_k5_matched_to_pred_grid.rds')) %>% 
+  dplyr::select(-depth_cat) %>% 
+  rename(year=Year)
 grid_glorys_krill_join <- grid_glorys_join %>% 
-  left_join(krill_preds,by=join_by(x, y, fivekm_grid, bathy.bottom.depth, year)) %>% 
+  # left_join(krill_preds,by=join_by(x, y, fivekm_grid, bathy.bottom.depth, year)) %>% 
   left_join(k4)
 grid_glorys_krill_join <- grid_glorys_krill_join %>% 
   filter(!is.na(thetao))

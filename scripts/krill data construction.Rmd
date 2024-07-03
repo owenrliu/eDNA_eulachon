@@ -1,0 +1,725 @@
+---
+title: "Krill NASC Matching"
+author: "Owen R. Liu"
+date: "2024-04-08"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(dplyr.summarise.inform=FALSE)
+library(tidyverse)
+library(here)
+library(sf)
+library(viridis)
+library(ggsci)
+library(cowplot)
+library(rnaturalearth)
+library(marmap)
+library(RANN)
+library(contoureR)
+library(sdmTMB)
+library(nngeo)
+library(corrplot)
+library(tictoc)
+```
+
+# Purpose
+
+The goal of this analysis is to match data on the distribution and relative abundance of krill from [Beth Phillips' work](https://onlinelibrary.wiley.com/doi/full/10.1111/fog.12628) to our eulachon eDNA samples in order to use krill abundance as a predictor in eulachon SDMs.
+
+# Import Data
+
+There are two versions of the krill data we will use. The first is the raw NASC backscatter data, which we will summarize in various ways. The second is a version of the data filtered through kernel density estimation, as in Phillips et al. (2021).
+
+First, import the krill backscatter data. The data represent relative krill densities between 50-300 m in the water column, along all transects that collected acoustic data during the years 2019, 2021, and 2023. In the data, ID is a combination of Transect number and Interval (horizontal 0.5 nmi bin, with numbering starting at 1 at the start of each transect), and the min/max depth of each 10m bin. All of the zeroes are still included, along with positive NASC values.
+
+```{r}
+# data in two overlapping pieces
+kdf1 <- read_csv(here('data','HakeSurvey_KrillNASC_0.5nmix10m_cells_2019-2023.csv')) %>%
+  filter(Layer_depth_min>140)
+
+kdf2 <- read_csv(here('data','HakeSurvey_KrillNASC_0.5nmix10m_14-150m_2019-2023_AllCombine.csv'))
+
+kdf <- bind_rows(kdf2,kdf1) %>% 
+  distinct()
+
+x <- kdf %>% count(Year,ID,Species,Transect,Interval,Layer_depth_min,NASC)
+```
+
+Import the KDE/kriged version of the krill data.
+
+```{r}
+kde <- read_csv(here('data','KrillKDE_2019_2023.csv'))
+```
+
+Import the eulachon samples
+
+```{r}
+d_obs <- read_rds(here('data','qPCR','eulachon qPCR 2019 and 2021 samples clean.rds')) %>% 
+  mutate(Ct=replace_na(Ct,0)) %>% # delta-models in sdmTMB need this
+  mutate(utm.lon.km=utm.lon.m/1000,
+         utm.lat.km=utm.lat.m/1000)
+```
+
+Background map
+
+```{r}
+#background map
+pred.crs <- terra::rast(here('Data','raster_grid_blake','fivekm_grid.tif')) %>% st_crs()
+coast <- ne_states(country='United States of America',returnclass = 'sf') %>% 
+  filter(name %in% c('California','Oregon','Washington','Nevada')) %>%
+  st_transform(crs = pred.crs)
+```
+
+Bathymetry
+
+```{r}
+# bathy
+limits.for.map <- d_obs %>% 
+  st_as_sf(coords=c('lon','lat'),crs=4326) %>% 
+  st_bbox()+c(-1,-1,1,1) #add an extra degree on each side for buffer
+
+
+b = getNOAA.bathy(lon1 = limits.for.map["xmin"],
+                  lon2 = limits.for.map[ "xmax" ],
+                  lat1 = limits.for.map["ymin"],
+                  lat2 = limits.for.map["ymax"],
+                  resolution = 1,keep = TRUE)
+# make into a dataframe of contours for ggplotting
+bdf <- fortify(b) %>% 
+  contoureR::getContourLines(levels=c(0, -100, -200, -500, -1000,-1500)) %>% 
+  st_as_sf(coords=c("x","y"),crs=4326) %>% 
+  st_transform(pred.crs) %>%
+  mutate(x=st_coordinates(.)[,1],y=st_coordinates(.)[,2]) %>% 
+  st_set_geometry(NULL)
+```
+
+# Visualize Patterns
+
+## NASC- Summary Histograms
+
+```{r}
+ksf <- kdf %>% st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% st_transform(pred.crs)
+
+# log(NASC) by depth bin
+ksf %>% 
+  mutate(big_depth_category=cut(Layer_depth_min,10)) %>% 
+  ggplot(aes(log(NASC),color=factor(Year)))+
+  geom_density(linewidth=1.5)+theme_minimal()+
+  scale_color_aaas()+
+  labs(x="log (NASC)",title="Distribution by Depth Category")+
+  facet_wrap(~big_depth_category)
+```
+
+log (NASC) looks pretty normal, with a heavy left tail (zeroes). When faceted by depth bin, it's clear that in general, there were more krill in 2019 than in 2021 or 2023. 
+
+## KDE- Summary Histograms
+
+Similar to above, but look at the kernel density smoothed data from Phillips et al. The KDE is summed through the water column and scales from 0 to 1.
+
+```{r}
+kde_sf <- kde %>% st_as_sf(coords=c("lon","lat"),crs=4326) %>% st_transform(pred.crs) %>% 
+  mutate(x=st_coordinates(.)[,1],y=st_coordinates(.)[,2])
+
+# raw
+kde_sf %>% 
+  ggplot(aes(kde))+
+  geom_density()+theme_minimal()
+# natural log
+kde_sf %>% 
+  ggplot(aes(log10(kde)))+
+  geom_density()+theme_minimal()+
+  labs(x="log (KDE)")
+```
+
+## NASC- Latitude by Depth
+
+```{r,fig.width=8,fig.height=8}
+latdepth_plot <- kdf %>% 
+  mutate(Layer_depth_mid=Layer_depth_min+5) %>% 
+  mutate(NASC=na_if(NASC,0)) %>% 
+  ggplot(aes(Layer_depth_mid,Lat,size=log(NASC+1),color=log(NASC+1)))+
+  geom_point()+
+  scale_color_viridis(option="magma",na.value='gray80')+
+  scale_size_area(max_size=4,na.value=0.5)+
+  facet_wrap(~Year)+
+  labs(x="Sample Depth (m)",title="NASC by Latitude/Sample Depth")+
+  theme_minimal()+theme(panel.background = element_rect(color="black",fill=NA))
+latdepth_plot
+```
+
+This combined figure of latitude, depth, and NASC shows the change in depth distribution by latitude across years. In it, it is clear that there are differences in not only the depth distribution of krill among years (as shown in the last two plots), but also there are hotspots in different places along the coast (e.g., the presence of krill at 40N in 2019 but not really in either subsequent year
+
+## NASC- by Transect
+
+Similar to the above, we can parse the NASC outputs by transect to look at patterns.
+
+```{r}
+krill_by_x <- kdf %>%
+  group_by(Transect) %>% 
+  mutate(xLatMean=mean(Lat)) %>% 
+  arrange(xLatMean) %>% 
+  group_by(Transect,xLatMean) %>% 
+  nest() %>% 
+  mutate(p=purrr::map2(Transect,data,function(x,df){
+    df %>% 
+      ggplot(aes(Layer_depth_min,NASC,color=factor(Year),shape=factor(Year)))+
+      geom_point()+
+      labs(color="Year",shape="Year",x="Depth Layer",y="NASC",title=x)+
+      theme_minimal()+
+      # geom_smooth(se=F)+
+      theme(panel.border = element_rect(fill=NA,color='black'))+
+      scale_color_manual(breaks=c("2019","2021","2023"),values=viridis_pal(option="G",end=0.8)(3),drop=F)+
+      scale_shape_manual(breaks=c("2019","2021","2023"),values=c(16,17,18),drop=F)
+  }))
+```
+
+Latitudinal layout of transects (for reference)
+
+```{r}
+krill_by_x %>% ggplot(aes(fct_reorder(Transect,xLatMean),xLatMean))+geom_point()+
+  theme_minimal()+
+  theme(axis.text.x=element_text(angle=90,vjust=0))+
+  ggtitle("Mean Transect Latitude")
+```
+
+Plots of NASC by depth across transects, arranged South to North by average latitude of each transect
+
+```{r,fig.height=8,fig.width=12}
+plts <- krill_by_x %>% pull(p)
+plot_grid(plotlist=plts[1:20],nrow=4)
+plot_grid(plotlist=plts[21:40],nrow=4)
+plot_grid(plotlist=plts[41:60],nrow=4)
+plot_grid(plotlist=plts[61:80],nrow=4)
+plot_grid(plotlist=plts[81:100],nrow=4)
+plot_grid(plotlist=plts[101:120],nrow=4)
+plot_grid(plotlist=plts[121:134],nrow=4)
+```
+
+Some interesting interannual changes are obvious here, both depth shifts between years and magnitude of the signal.
+
+## KDE- Latitude by Bottom Depth
+
+The KDE is flat (summed vertically), but we can still look at krill distribution by latitude and bottom depth. This differs from the NASC latitude-by-depth plot above, since we use bottom depth here instead of sample depth.
+
+```{r}
+kde_latdepth_plot <- kde %>% 
+  ggplot(aes(z/10,lat,size=kde,color=kde))+
+  geom_point()+
+  scale_color_viridis(option="magma",na.value='gray80')+
+  scale_size_area(max_size=4,na.value=0.5)+
+  facet_wrap(~year)+
+  labs(x="Bottom Depth (m)",title="Krill KDE by Latitude/Bottom Depth")+
+  theme_minimal()+theme(panel.background = element_rect(color="black",fill=NA))
+kde_latdepth_plot
+```
+
+# Match to Eulachon Data
+
+With these comparisons among years in hand, we can spatially match the NASC data to the eulachon eDNA samples. We match by spatial nearest neighbors.
+
+```{r}
+kdf <- kdf %>% 
+  mutate(transect_num=str_remove_all(Transect,"x") %>% as.integer())
+```
+
+## Depth-Integrated NASC
+
+We can make a flat (depth-integrated) version and then match by location.
+
+```{r}
+kdf_2d <- kdf %>% 
+  group_by(Year,ID,Lat,Lon) %>% 
+  summarise(sumNASC=sum(NASC)) %>% 
+  ungroup() %>% 
+  mutate(latbin=cut(Lat,5))
+```
+
+## NASC- Find Neighbors
+
+Let's match eDNA and krill by year and location. There are multiple ways we can conceptualize that this matching might work, depending on how much smoothing or averaging we want to do, across both latitude/longitude and depth. For example, we can match each eDNA sample to its nearest neighbor in lat/lon space, then extract the krill NASC value from the closest depth to our eDNA sample. Alternatively, we could do the same, but use a depth-integrated version of krill, as we calculated in the previous step. Finally, we could average krill NASC among, e.g., the five nearest neighbors to each eDNA sample, or among all samples within some distance of the eDNA sample.
+
+In order to stay flexible to the above options, we'll write a flexible function to find matches for individual eDNA samples.
+
+```{r matchfxn}
+# krill data locations, converted to a flat projection
+krill_locs <- kdf_2d %>%
+  st_as_sf(coords=c("Lon","Lat"),crs=4326,remove=F) %>% 
+  st_transform(pred.crs) %>% 
+  mutate(utm.lon.m=st_coordinates(.)[,1],utm.lat.m=st_coordinates(.)[,2])%>% 
+  st_set_geometry(NULL)
+
+# this function takes a row/observation from the eDNA dataset, and finds its nn nearest neighbors on the same transect
+
+match_krill <- function(dfrow,nn=5){
+  # transect number
+  x_num <- dfrow$transect_num
+  # location of eDNA sample
+  this_loc <- dfrow %>% dplyr::select(utm.lon.m,utm.lat.m)
+  # krill data to query (same transect, same year)
+  krill_to_compare <- kdf %>% filter(Year==dfrow$year,transect_num==x_num)%>% 
+    st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% st_transform(pred.crs)
+  # locations of the krill data
+  krill_locs <- krill_to_compare %>% 
+    distinct(ID,.keep_all = T)
+  # determine the nn nearest neighbors
+  nns <- nn2(st_coordinates(krill_locs),this_loc,k=nn)
+  # find the krill data that were identified as neighbors
+  krill_matched <- krill_locs %>% 
+    st_set_geometry(NULL) %>% 
+    slice(as.numeric(nns$nn.idx)) %>% 
+    # include the distance (here, in meters)
+    mutate(nn.dist=nns$nn.dists %>% as.numeric) %>%
+    # squared/inverse distance weighting (for later use)
+    mutate(dist.weight=1/(nn.dist^2)) %>% 
+    dplyr::select(Year,ID,nn.dist,dist.weight)
+  # finally, use the matched locations to filter the krill data, then return
+  krill_final <- krill_to_compare %>% 
+    st_set_geometry(NULL) %>% 
+    left_join(krill_matched,by=join_by(Year,ID)) %>% 
+    filter(!is.na(nn.dist)) %>% 
+    dplyr::select(Year,ID,Layer_depth_min,Layer_depth_max,NASC,nn.dist,dist.weight)
+  krill_final
+}
+```
+
+```{r,eval=F}
+# Run on entire dataset
+tic("Matching krill nearest neighbors")
+edna_krill_matched_5nn <- d_obs %>%
+  mutate(transect1=str_split_i(station,"-",1) %>% as.integer(),
+         transect2=str_split_i(station,"_",1) %>% str_remove_all("x") %>% as.integer()) %>% 
+  mutate(transect_num=coalesce(transect1,transect2)) %>% 
+  dplyr::select(-transect1,-transect2) %>% 
+  mutate(rn=row_number()) %>% 
+  group_by(rn) %>% 
+  nest() %>% 
+  mutate(krill=purrr::map(data,match_krill)) %>% 
+  ungroup()
+toc()
+# this join takes ~70m (06/10/24)
+```
+
+We end up with a nested data frame of krill data (5 nearest neighbors on the transect, and all depth slices) assigned to each "observation" (row) of the eDNA data.
+
+```{r,eval=F}
+write_rds(edna_krill_matched_5nn,here('model output','edna_krill_matched_5nn.rds'))
+```
+
+```{r}
+# if you're not re-running the above, can just import here
+edna_krill_matched_5nn <- read_rds(here('model output','edna_krill_matched_5nn.rds'))
+```
+
+
+## NASC- Calculate Krill Metrics
+
+Options:
+
+*   k1 - Choose closest depth slice and nearest neighbor
+*   k2 - Choose closest depth slice, average across neighbors using inverse distance as weights
+*   k3 - Choose nearest neighbor only, but integrate over depth
+*   k4 - Integrate over depth, then smooth over space using inverse distance as weights
+*   k5 - Same as above, but use regular inverse distance weighting, not squared inverse distance (i.e., penalize distance less than above)
+
+```{r}
+edna_krill_metrics <- edna_krill_matched_5nn %>% 
+  mutate(depth_slice=purrr::map(data,function(df)df %>% pull(depth_cat))) %>% 
+  # depths that will match krill "Layer_depth_min"
+  mutate(depth_match=case_when(
+    depth_slice==0 ~ 10L,
+    depth_slice==25 ~ 20L,
+    depth_slice==50 ~ 50L,
+    depth_slice==100 ~ 100L,
+    depth_slice==150 ~ 150L,
+    depth_slice==200 ~ 200L,
+    depth_slice==300 ~ 290L,
+    depth_slice==500 ~ 290L,
+  )) %>% 
+  # one more depth match- if the depth slice is deeper than the deepest krill sample for that location, use max krill depth instead
+  mutate(depth_match=purrr::map2(depth_match,krill,function(depth,df){
+    ifelse(depth>max(df$Layer_depth_min),max(df$Layer_depth_min),depth)
+  })) %>% 
+  # first metric- closest depth, nearest neighbor
+  mutate(k1=purrr::map2_dbl(krill,depth_match,function(df,depth){
+    out <- df %>% filter(Layer_depth_min==depth) %>% filter(nn.dist==min(nn.dist)) %>% 
+      distinct() %>% 
+      pull(NASC) %>% as.numeric()
+    out
+  })) %>% 
+  # second metric-closest depth slice, averaged across neighbors with inverse distance weighting
+  mutate(k2=purrr::map2_dbl(krill,depth_match,function(df,depth){
+    nndf <- df %>% filter(Layer_depth_min==depth)
+    out <- weighted.mean(nndf$NASC,w=nndf$dist.weight)
+    out
+  })) %>% 
+  # third metric-closest neighbor, integrate across depth
+  mutate(k3=purrr::map2_dbl(krill,depth_match,function(df,depth){
+    nndf <- df %>% filter(nn.dist==min(nn.dist))
+    out <- sum(nndf$NASC)
+    out
+  })) %>% 
+  # fourth metric-integrate across depth, then average across neighbors with inverse distance weighting
+  mutate(k4=purrr::map2_dbl(krill,depth_match,function(df,depth){
+    nndf <- df %>% group_by(nn.dist,dist.weight) %>% summarise(sumNASC=sum(NASC)) %>% ungroup()
+    out <- weighted.mean(nndf$sumNASC,w=nndf$dist.weight)
+    out
+  })) %>% 
+  # fifth metric-integrate across depth, then average across neighbors with distance weighting (but not squared distances)
+  mutate(k5=purrr::map2_dbl(krill,depth_match,function(df,depth){
+    nndf <- df %>% group_by(nn.dist,dist.weight) %>% summarise(sumNASC=sum(NASC)) %>% ungroup()
+    out <- weighted.mean(nndf$sumNASC,w=1/nndf$nn.dist)
+    out
+  }))
+```
+
+```{r}
+#unnest
+edna_krill_metrics <- edna_krill_metrics %>% 
+  dplyr::select(data,k1:k5) %>% 
+  unnest(cols=c(data))
+```
+
+# KDE- Matching
+
+We now have 5 alternative krill metrics (k1 to k5 summarized from raw NASC). The last metric to include is the nearest neighbor matching of Phillips et al. krill KDE.
+
+```{r}
+# nearest neighbor matching 
+d_obs_sf <- d_obs %>% st_as_sf(coords=c("utm.lon.m","utm.lat.m"),crs=pred.crs)
+kde.preds.sf <- kde_sf %>% 
+  # only need to join the estimate of krill
+  dplyr::select(year,kde) %>%
+  mutate(k6=kde)
+# 
+d_obs_kde_join <- purrr::map_df(unique(d_obs_sf$year),function(y){
+  d_obs_sf %>% filter(year==y) %>% st_join(kde.preds.sf %>% filter(year==y),st_nn,k=1)
+})
+# 
+edna_krill_metrics$k6 <- d_obs_kde_join$k6
+```
+
+# NASC to Grid Matching
+
+Need to match krill dataset to prediction grid for calculation of some of the prediction variables.
+
+```{r}
+# here's the grid
+grid.pred <- read_rds(here('Data','prediction_grid_5km_3depths_no_covars.rds'))
+```
+
+
+
+```{r}
+# locations of krill data, by year
+klocs19 <- kdf_2d %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2019))
+klocs21 <- kdf_2d %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2021))
+
+# locations of grid cells, by depth and year
+grlocs.pred19_0 <- grid.pred %>% 
+  filter(depth_cat==0) %>% 
+  dplyr::select(x:depth_fct) %>% 
+  st_as_sf(coords=c("x","y"),crs=pred.crs,remove=F) %>% 
+  filter(Year%in% c(2019))
+
+grlocs.pred19_50 <- grid.pred %>% 
+  filter(depth_cat==50) %>% 
+  dplyr::select(x:depth_fct) %>% 
+  st_as_sf(coords=c("x","y"),crs=pred.crs,remove=F) %>% 
+  filter(Year%in% c(2019))
+
+grlocs.pred19_150 <- grid.pred %>% 
+  filter(depth_cat==150) %>% 
+  dplyr::select(x:depth_fct) %>% 
+  st_as_sf(coords=c("x","y"),crs=pred.crs,remove=F) %>% 
+  filter(Year%in% c(2019))
+
+grlocs.pred21_0 <- grid.pred %>% 
+  filter(depth_cat==0) %>% 
+  dplyr::select(x:depth_fct) %>% 
+  st_as_sf(coords=c("x","y"),crs=pred.crs,remove=F) %>% 
+  filter(Year%in% c(2021))
+
+grlocs.pred21_50 <- grid.pred %>% 
+  filter(depth_cat==50) %>% 
+  dplyr::select(x:depth_fct) %>% 
+  st_as_sf(coords=c("x","y"),crs=pred.crs,remove=F) %>% 
+  filter(Year%in% c(2021))
+
+grlocs.pred21_150 <- grid.pred %>% 
+  filter(depth_cat==150) %>% 
+  dplyr::select(x:depth_fct) %>% 
+  st_as_sf(coords=c("x","y"),crs=pred.crs,remove=F) %>% 
+  filter(Year%in% c(2021))
+
+# find5 nearest neighbors to each grid cell
+k_gr_match_2019 <- st_nn(grlocs.pred19_0,klocs19,k=5,returnDist = T)
+k_gr_match_2021 <- st_nn(grlocs.pred21_0,klocs21,k=5,returnDist = T)
+
+# calculate k4 (inverse squared distance weighted krill)
+# only 1 value per grid cell (depth-integrated)
+gr_krill_k4_19 <- purrr::map2_dbl(k_gr_match_2019$nn,k_gr_match_2019$dist,function(idx,d){
+  distweight <- 1/(d^2)
+  weighted.mean(klocs19$sumNASC[idx],distweight)
+})
+gr_krill_k4_21 <- purrr::map2_dbl(k_gr_match_2021$nn,k_gr_match_2021$dist,function(idx,d){
+  distweight <- 1/(d^2)
+  weighted.mean(klocs21$sumNASC[idx],distweight)
+})
+
+# calculate k5 (inverse distance weighted krill)
+# only 1 value per grid cell (depth-integrated)
+gr_krill_k5_19 <- purrr::map2_dbl(k_gr_match_2019$nn,k_gr_match_2019$dist,function(idx,d){
+  distweight <- 1/(d)
+  weighted.mean(klocs19$sumNASC[idx],distweight)
+})
+gr_krill_k5_21 <- purrr::map2_dbl(k_gr_match_2021$nn,k_gr_match_2021$dist,function(idx,d){
+  distweight <- 1/(d)
+  weighted.mean(klocs21$sumNASC[idx],distweight)
+})
+```
+For some krill metrics, this is harder because we have to match in 3D
+
+```{r}
+klocs19_0 <- kdf %>% 
+  filter(Layer_depth_min==10) %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2019))
+klocs19_50 <- kdf %>% 
+  filter(Layer_depth_min==50) %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2019))
+klocs19_150 <- kdf %>% 
+  filter(Layer_depth_min==150) %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2019))
+klocs21_0 <- kdf %>% 
+  filter(Layer_depth_min==10) %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2021))
+klocs21_50 <- kdf %>% 
+  filter(Layer_depth_min==50) %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2021))
+klocs21_150 <- kdf %>% 
+  filter(Layer_depth_min==150) %>% 
+  st_as_sf(coords=c("Lon","Lat"),crs=4326) %>% 
+  st_transform(pred.crs) %>%  
+  filter(Year %in% c(2021))
+
+# find5 nearest neighbors to each grid cell and depth category
+k_gr_match_2019_0 <- st_nn(grlocs.pred19_0,klocs19_0,k=5,returnDist = T)
+k_gr_match_2019_50 <- st_nn(grlocs.pred19_50,klocs19_50,k=5,returnDist = T)
+k_gr_match_2019_150 <- st_nn(grlocs.pred19_150,klocs19_150,k=5,returnDist = T)
+k_gr_match_2021_0 <- st_nn(grlocs.pred21_0,klocs21_0,k=5,returnDist = T)
+k_gr_match_2021_50 <- st_nn(grlocs.pred21_50,klocs21_50,k=5,returnDist = T)
+k_gr_match_2021_150 <- st_nn(grlocs.pred21_150,klocs21_150,k=5,returnDist = T)
+
+# Now we should be able to calculate k1,k2, etc. on the pred grid
+gr_krill_k2_19_0 <- purrr::map2_dbl(k_gr_match_2019_0$nn,k_gr_match_2019_0$dist,function(idx,d){
+  distweight=1/d
+  weighted.mean(klocs19_0$NASC[idx],distweight)
+})
+gr_krill_k2_19_50 <-  purrr::map2_dbl(k_gr_match_2019_50$nn,k_gr_match_2019_50$dist,function(idx,d){
+  distweight=1/d
+  weighted.mean(klocs19_50$NASC[idx],distweight)
+})
+gr_krill_k2_19_150 <- purrr::map2_dbl(k_gr_match_2019_150$nn,k_gr_match_2019_150$dist,function(idx,d){
+  distweight=1/(d^2)
+  weighted.mean(klocs19_150$NASC[idx],distweight)
+})
+gr_krill_k2_21_0 <- purrr::map2_dbl(k_gr_match_2021_0$nn,k_gr_match_2021_0$dist,function(idx,d){
+  distweight=1/d
+  weighted.mean(klocs21_0$NASC[idx],distweight)
+})
+gr_krill_k2_21_50 <- purrr::map2_dbl(k_gr_match_2021_50$nn,k_gr_match_2021_50$dist,function(idx,d){
+  distweight=1/d
+  weighted.mean(klocs21_50$NASC[idx],distweight)
+})
+gr_krill_k2_21_150 <- purrr::map2_dbl(k_gr_match_2021_150$nn,k_gr_match_2021_150$dist,function(idx,d){
+  distweight=1/(d^2)
+  weighted.mean(klocs21_150$NASC[idx],distweight)
+})
+```
+
+Now we join all of the krill metrics appropriately back to the grid.
+
+```{r}
+# sort and coalesce, 2019
+gridk.19_0 <- grlocs.pred19_0 %>% 
+  st_set_geometry(NULL) %>% 
+  # add k4 and k5 to the surface
+  mutate(k4=gr_krill_k4_19,
+         k5=gr_krill_k5_19)
+# apply k4 and k5 to the other depth categories as well (even though the values will be the same as the surface)
+gridk.19_50 <- grlocs.pred19_0 %>% 
+  st_set_geometry(NULL) %>% 
+  mutate(depth_cat=50,depth_fct="50") %>% 
+  # add k4 and k5 to the surface
+  mutate(k4_50=gr_krill_k4_19,
+         k5_50=gr_krill_k5_19)
+gridk.19_150 <- grlocs.pred19_0 %>% 
+  st_set_geometry(NULL) %>% 
+  mutate(depth_cat=150,depth_fct="150") %>% 
+  # add k4 and k5 to the surface
+  mutate(k4_150=gr_krill_k4_19,
+         k5_150=gr_krill_k5_19)
+gridk.19 <- grid.pred %>% 
+  filter(Year==2019) %>% 
+  left_join(gridk.19_0,by = join_by(x, y, fivekm_grid, ykm, xkm, bathy.bottom.depth, Year, depth_cat, depth_fct)) %>% 
+  left_join(gridk.19_50,by = join_by(x, y, fivekm_grid, ykm, xkm, bathy.bottom.depth, Year, depth_cat, depth_fct)) %>% 
+  left_join(gridk.19_150,by = join_by(x, y, fivekm_grid, ykm, xkm, bathy.bottom.depth, Year, depth_cat, depth_fct)) %>% 
+  mutate(k4=coalesce(k4,k4_50,k4_150),
+         k5=coalesce(k5,k5_50,k5_150)) %>% 
+  dplyr::select(x:k5)
+```
+
+
+```{r}
+gridk.21_0 <- grlocs.pred21_0 %>% 
+  st_set_geometry(NULL) %>% 
+  # add k4 and k5 to the surface
+  mutate(k4=gr_krill_k4_21,
+         k5=gr_krill_k5_21)
+# apply k4 and k5 to the other depth categories as well (even though the values will be the same as the surface)
+gridk.21_50 <- grlocs.pred21_0 %>% 
+  st_set_geometry(NULL) %>% 
+  mutate(depth_cat=50,depth_fct="50") %>% 
+  # add k4 and k5 to the surface
+  mutate(k4_50=gr_krill_k4_21,
+         k5_50=gr_krill_k5_21)
+gridk.21_150 <- grlocs.pred21_0 %>% 
+  st_set_geometry(NULL) %>% 
+  mutate(depth_cat=150,depth_fct="150") %>% 
+  # add k4 and k5 to the surface
+  mutate(k4_150=gr_krill_k4_21,
+         k5_150=gr_krill_k5_21)
+gridk.21 <- grid.pred %>% 
+  filter(Year==2021) %>% 
+  left_join(gridk.21_0,by = join_by(x, y, fivekm_grid, ykm, xkm, bathy.bottom.depth, Year, depth_cat, depth_fct)) %>% 
+  left_join(gridk.21_50,by = join_by(x, y, fivekm_grid, ykm, xkm, bathy.bottom.depth, Year, depth_cat, depth_fct)) %>% 
+  left_join(gridk.21_150,by = join_by(x, y, fivekm_grid, ykm, xkm, bathy.bottom.depth, Year, depth_cat, depth_fct)) %>% 
+  mutate(k4=coalesce(k4,k4_50,k4_150),
+         k5=coalesce(k5,k5_50,k5_150)) %>% 
+  dplyr::select(x:k5)
+```
+
+```{r}
+# now match the 3D krill (k2)
+gridk2.19 <- grid.pred %>%
+  filter(Year==2019) %>% 
+  arrange(Year,depth_cat) %>% 
+  mutate(k2=c(gr_krill_k2_19_0,gr_krill_k2_19_50,gr_krill_k2_19_150))
+gridk2.21 <- grid.pred %>%
+  filter(Year==2021) %>% 
+  arrange(Year,depth_cat) %>% 
+  mutate(k2=c(gr_krill_k2_21_0,gr_krill_k2_21_50,gr_krill_k2_21_150))
+
+# join with k4 and k5
+gridk.19 <- gridk.19 %>% 
+  left_join(gridk2.19,by = join_by(x, y, fivekm_grid, ykm, xkm, bathy.bottom.depth, Year, depth_cat, depth_fct))
+gridk.21 <- gridk.21 %>% 
+  left_join(gridk2.21,by = join_by(x, y, fivekm_grid, ykm, xkm, bathy.bottom.depth, Year, depth_cat, depth_fct))
+
+grid.pred.k <- bind_rows(gridk.19,gridk.21)
+```
+
+```{r}
+grid.pred.k %>% 
+  ggplot(aes(x,y,fill=k4))+
+  geom_raster()+
+  coord_equal()+
+  facet_wrap(~Year)+
+  scale_fill_viridis(option="magma")
+
+grid.pred.k %>% 
+  ggplot(aes(x,y,fill=k5))+
+  geom_raster()+
+  coord_equal()+
+  facet_wrap(~Year)+
+  scale_fill_viridis(option="magma")
+
+grid.pred.k %>% 
+  ggplot(aes(x,y,fill=k2))+
+  geom_raster()+
+  coord_equal()+
+  facet_grid(depth_cat~Year)+
+  scale_fill_viridis(option="magma",trans='log10')
+```
+
+
+# Save 
+
+```{r,eval=F}
+# matched to samples
+write_rds(edna_krill_metrics,here('model output','edna_krill_metrics.rds'))
+
+# matched to prediction grid
+# we add our inverse distance-weighted k4 metric too
+# kfit.preds.out <- kfit.preds %>% 
+#   filter(Year %in% c(2019,2021)) %>% 
+#   dplyr::select(x:bathy.bottom.depth,k6_ln=est,year=Year)
+# write_rds(kfit.preds.out,here('model output','krill_sdm_matched_to_pred_grid.rds'))
+write_rds(grid.pred.k,here('model output','krill_k2_k4_k5_matched_to_pred_grid.rds'))
+```
+
+```{r}
+# if you need to read (i.e., you don't need or want to re-run the slow step above)
+edna_krill_metrics <- read_rds(here('model output','edna_krill_metrics.rds'))
+```
+
+# Correlation
+
+Are krill and eDNA correlated?
+
+```{r,fig.height=8,fig.width=6,warning=F,message=F}
+edna_krill_cor <- edna_krill_metrics %>%  
+  filter(Ct>0,depth_cat<300) %>% 
+  dplyr::select(Ct,copies_ul,k1:k6) %>%
+  # only positive estimates, and only eulachon-relevant samples
+  cor(use = "complete.obs")
+corrplot(edna_krill_cor,method='number')
+
+# pairs plot, including zeroes
+edna_krill_pairs_zeroes <- edna_krill_metrics %>% 
+  dplyr::select(Ct,k1:k6) %>% 
+  GGally::ggpairs()+
+  ggtitle("Pairs plots, all eDNA observations")
+
+edna_krill_pairs_zeroes
+
+# pairs plot, excluding zeroes for Ct
+edna_krill_pairs <- edna_krill_metrics %>% 
+  filter(Ct>0, depth_cat<300) %>% 
+  dplyr::select(Ct,k1:k6) %>% 
+  GGally::ggpairs()+
+  ggtitle("Pairs plots, for all Ct>0")
+
+edna_krill_pairs
+
+# pairs plot, excluding zeroes for Ct AND krill
+edna_krill_pairs_positive_only <- edna_krill_metrics %>% 
+  filter(Ct>0, k1>0, depth_cat<300) %>% 
+  dplyr::select(Ct,k1:k6) %>% 
+  GGally::ggpairs()+
+  ggtitle("Pairs plots, for all Ct>0 AND krill>0")
+
+edna_krill_pairs_positive_only
+```
+
+

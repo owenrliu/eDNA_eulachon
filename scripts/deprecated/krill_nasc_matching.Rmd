@@ -40,8 +40,12 @@ There are two versions of the krill data we will use. The first is the raw NASC 
 First, import the krill backscatter data. The data represent relative krill densities between 50-300 m in the water column, along all transects that collected acoustic data during the years 2019, 2021, and 2023. In the data, ID is a combination of Transect number and Interval (horizontal 0.5 nmi bin, with numbering starting at 1 at the start of each transect), and the min/max depth of each 10m bin. All of the zeroes are still included, along with positive NASC values.
 
 ```{r}
-kdf <- read_csv(here('data','HakeSurvey_KrillNASC_0.5nmix10m_cells_2019-2023.csv'))
+kdf1 <- read_csv(here('data','HakeSurvey_KrillNASC_0.5nmix10m_cells_2019-2023.csv'))
+kdf2 <- read_csv(here('data','HakeSurvey_KrillNASC_0.5nmix10m_14-150m_2019-2023_AllCombine.csv'))
+kdf <- bind_rows(kdf2,kdf1) %>% 
+  distinct()
 ```
+
 Import the KDE/kriged version of the krill data.
 
 ```{r}

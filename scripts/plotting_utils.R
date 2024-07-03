@@ -7,7 +7,7 @@ plot_theme <- theme_minimal()+theme(panel.border = element_rect(color="black",fi
 theme_black <- theme_minimal()+theme(panel.border = element_rect(color="black",fill=NA),text=element_text(color='white'))
 theme_set(plot_theme)
 
-make_pred_obs_plots <- function(modelobj,stands, model_name="",saveplots=T){
+make_pred_obs_plots <- function(modelobj,stands, model_name="",saveplots=T,savetype=c('pdf','png')){
   
   r <- modelobj$sd_report$par.random
   
@@ -69,7 +69,7 @@ make_pred_obs_plots <- function(modelobj,stands, model_name="",saveplots=T){
     geom_abline(intercept=0,slope = 1,linetype="dashed",color="red") +
     scale_x_continuous(limits=c(0,1)) +
     facet_grid(year~depth_cat)  +
-    labs(title="Unknown Samples: Pres/Abs",x="Predicted Probabiliy of Amplification (theta)",
+    labs(title="Unknown Samples: Pres/Abs",x="Predicted Probability of Amplification (theta)",
          y="Observed Ct>0")
   # p_bin_unk
   
@@ -83,13 +83,22 @@ make_pred_obs_plots <- function(modelobj,stands, model_name="",saveplots=T){
          y="Observed Ct")
   
   if(saveplots){
-    pdf(file = here("plots",paste(model_name,"Fits Standards and Pred-Obs.pdf")),  
-        onefile=T,width = 11,height=8.5)
-    print(p_bin_stand)
-    print(p_pos_stand)
-    print(p_bin_unk)
-    print(p_pos_unk)
-    dev.off()    
+    if(savetype=="png"){
+      ggsave(here('plots',paste(model_name,"Standards Binary.png")),p_bin_stand,w=6,h=4.5)
+      ggsave(here('plots',paste(model_name,"Standards Positive.png")),p_pos_stand,w=6,h=4.5)
+      ggsave(here('plots',paste(model_name,"Unknowns Binary.png")),p_bin_unk,w=6,h=4.5)
+      ggsave(here('plots',paste(model_name,"Unknown Pred vs Obs.png")),p_pos_unk,w=6,h=4.5)
+      
+    } else{
+      pdf(file = here("plots",paste(model_name,"Fits Standards and Pred-Obs.pdf")),  
+          onefile=T,width = 11,height=8.5)
+      print(p_bin_stand)
+      print(p_pos_stand)
+      print(p_bin_unk)
+      print(p_pos_unk)
+      dev.off()    
+      
+    }
   }
   # p_pos_unk
   # p_bin_unk2
