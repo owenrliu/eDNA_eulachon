@@ -1,7 +1,7 @@
 ---
 title: "Eulachon eDNA SDMs"
 author: "Owen R. Liu"
-date: "2024-02-09"
+date: "2025-01-09"
 output: 
   html_document:
     toc: true
@@ -55,9 +55,9 @@ Combinations of spatial fields and intercepts gives us 16 models to consider. So
 Import eDNA and covariate data, designate offsets, and build prediction grid. Note that cleaning and joining of the standards and unknown samples has been done in other scripts---one to process the 2019 data, one for 2021, and one to join them. If desired, you can re-run those here, but they are not evaluated out for now to save time.
 
 ```{r,eval=F,warning=F,message=F}
-rmarkdown::render(here::here('scripts','process 2019 eulachon data.Rmd'),quiet=TRUE)
-rmarkdown::render(here::here('scripts','process 2021 eulachon data.Rmd'),quiet=TRUE)
-source(here::here('scripts','join_eulachon_qPCR_data.R'))
+rmarkdown::render('process 2019 eulachon data.Rmd',quiet=TRUE)
+rmarkdown::render('process 2021 eulachon data.Rmd',quiet=TRUE)
+source('join_eulachon_qPCR_data.R')
 
 rm(list=ls())
 ```
@@ -67,7 +67,7 @@ rm(list=ls())
 Spatial coordinate reference system we will use for thesse analyses:
 
 ```{r}
-pred.crs <- terra::rast(here('data','raster_grid_blake','fivekm_grid.tif')) %>% st_crs()
+pred.crs <- terra::rast(here('data','raster_grid','fivekm_grid.tif')) %>% st_crs()
 ```
 
 Load in our cleaned and joined eDNA data.
@@ -81,14 +81,16 @@ d <- read_rds(here('data','qPCR',"eulachon qPCR 2019 and 2021 standards clean.rd
 d_obs <- read_rds(here('data','eDNA_glorys_matched.rds'))
 d_obs_bgc <- read_rds(here('data','eDNA_glorys_bgc_matched.rds')) %>% 
   dplyr::select(chl:phyc)
+
 # river influence variable, already matched to eDNA
 river_metric <- read_rds(here('data','eDNA_river_influence_matched.rds')) %>% 
   dplyr::select(river_input)
 
+# join the covariates
 d_obs <- d_obs %>% 
   bind_cols(d_obs_bgc) %>%
   bind_cols(river_metric) %>% 
-  mutate(Ct=replace_na(Ct,0)) %>% # delta-models in sdmTMB need this
+  mutate(Ct=replace_na(Ct,0)) %>% # delta-models in sdmTMB need this (no NAs)
   mutate(utm.lon.km=utm.lon.m/1000,
          utm.lat.km=utm.lat.m/1000)
 
@@ -99,12 +101,14 @@ d_obs %>%
   ggplot(aes(depth_cat,n,fill=factor(year)))+
   labs(x="Depth Category",y="Number of Positive Observations",fill="Year")+
   geom_col(position='dodge')
+
 # table of samples by depth/year
 obs_tbl <- d_obs %>% 
   mutate(amp=ifelse(Ct>0,"Amplified","Did not amplify")) %>% 
   # filter(depth_cat %in% c(0,50,150)) %>%
   mutate(depth_cat=factor(depth_cat)) %>% 
   count(year,depth_cat,amp)
+
 # positive samples by depth/year
 d_obs %>% 
   mutate(amp=ifelse(Ct>0,"Amplified","Did not amplify")) %>% 
@@ -129,19 +133,19 @@ d_obs_sf <- d_obs_filt %>% st_as_sf(coords=c('utm.lon.m','utm.lat.m'),crs=pred.c
 
 ## Covariate data
 
-Bathymetry/bottom depth was already attached to the samples during pre-processing. The field samples were also joined to modeled GLORYS data from their [Global Ocean Physics Reanalysis](https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/description). See script `match_GLORYS_temp_salinity.R`.
+Bathymetry/bottom depth was already attached to the samples during pre-processing. The field samples were also joined to modeled GLORYS data from their [Global Ocean Physics Reanalysis](https://data.marine.copernicus.eu/product/GLOBAL_MULTIYEAR_PHY_001_030/description). See scripts `match_GLORYS_temp_salinity.R` and `match_GLORYS_bgc.R`.
 
 ### Krill/Euphausiid data
 
 These data on the relative abundance of krill come from Beth Phillips, and are organized in the script `krill_nasc_matching`. As with the raw data cleaning above, we do not evaluate this chunk here and just use the output; but the user can run it if they wish. Be warned that it will take awhile to run.
 
 ```{r,eval=F}
-rmarkdown::render(here::here('scripts','krill_nasc_matching.Rmd'),quiet=TRUE)
+rmarkdown::render(here::here('krill data construction.Rmd'),quiet=TRUE)
 ```
 
 ```{r}
 # Load krill data
-edna_krill_metrics <- read_rds(here('model output','edna_krill_metrics.rds')) %>% 
+edna_krill_metrics <- read_rds(here('data','krill','edna_krill_metrics.rds')) %>% 
   filter(depth_cat %in% c(0,50,150))
   
 d_obs_filt <- d_obs_filt %>% bind_cols(edna_krill_metrics %>% dplyr::select(k1:k6))
@@ -158,7 +162,7 @@ riverine_influence <- read_rds(here('data','river_influence_grid_matched.rds')) 
 
 ## Log Covariates
 
-Try natural logging covariates to scale them better for fitting
+Natural logging covariates to scale them better for model fitting
 
 ```{r}
 #log covariates
@@ -199,51 +203,19 @@ d_obs_filt$depth_cat <- factor(d_obs_filt$depth_cat)
 d_obs_filt$yr_fct <- as.factor(d_obs_filt$year)
 ```
 
+Save the full dataset
+
 ```{r}
 write_rds(d_obs_filt,here::here('data','d_obs_ready_for_sdmTMB.rds'))
 ```
 
-
-## Designate Offsets
-
-While we are primarily interested in eulachon DNA concentration over space, time, and depth, we do not directly measure this concentration with our observations. Rather, we have replicate qPCR observations assocated with a water sample taken from a Niskin bottle and we have to account for the various modifications that have occurred during water sampling and processing. As part of this, we have a series of offsets that modify the true DNA concentration to affect what we observed in the qPCR. These [offsets](https://pbs-assess.github.io/sdmTMB/articles/model-description.html#offset-terms) will go into the model as log-transformed variables (because we will use a log link), and are scaling factors without estimated coefficients.
-
-We are primarily concerned with three offsets: one for the volume filtered out of each 2.5L Niskin bottle for each sample (`ln_vol_offset`). Second, some samples were inhibited in PCR, and were diluted to eliminate this inhibition (`ln_dil_offset`). Third, there was a wash error with some samples in 2019 that we correct for with a fixed effect.
-
-Finally, we include an expansion factor of 20 to convert our estimates to the standard measure of eDNA copies/L. We derived this assuming a 2.5L water sample eluted in 100uL Longmire and 2 uL used in each PCR reaction. Therfore, each 2uL of sample corresponds to 2% (2uL of 100uL) of the total sample and therefore is equivalent to the copies DNA contained in 50mL of water. (0.02 x 2500 ml = 50 ml). So, multiplying by 20 gets us to copies/L.
-
 ## INLA Mesh
 
-Create the mesh that will be the basis of our estimation---based on the spatial distribution of our sample data, the mesh is created in order to facilitate efficient processing and estimatino of the model in sdmTMB. Instead of calculating enormous covariance matrices in model fitting, we can drastically reduce computation time by using the mesh.
+Create the mesh that will be the basis of our estimation---based on the spatial distribution of our sample data, the mesh is created in order to facilitate efficient processing and estimation of the model in sdmTMB. Instead of calculating enormous covariance matrices in model fitting, we can drastically reduce computation time by using the mesh.
 
-NOTE: SEE THE BOTTOM OF THIS SCRIPT FOR SOME DIAGNOSTICS ON MESH COMPLEXITY
+At the bottom of this script under "Test Mesh Complexity", there is a description and plots of this INLA mesh selection exercise, leading us to select the final mesh used for modeling.
 
 ```{r}
-# locs <- d_obs_filt %>%
-#   distinct(year,station,utm.lon.km,utm.lat.km) %>%
-#   st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
-# 
-# max.edge = diff(range(st_coordinates(locs)[,1]))/4
-# bound.outer = diff(range(st_coordinates(locs)[,1]))/3
-# 
-# domain <-fmesher::fm_nonconvex_hull(locs,
-#                               concave = -0.025,
-#                               convex = -0.025)
-# # I think we can use this to subset our prediction grid
-# 
-# inla_mesh <- fmesher::fm_mesh_2d_inla(
-#     #loc=locs[,c("utm.lon","utm.lat")],
-#     loc.domain = domain, # coordinates
-#     boundary=domain,
-#     max.edge = c(max.edge,max.edge*10), # max triangle edge length; inner and outer meshes
-#     offset = c(max.edge, bound.outer),  # inner and outer border widths
-#     #max.n.strict=100,#,
-#     min.angle=15,
-#     cutoff = 29.32207 # minimum triangle edge length (see mesh selection exercise below)
-#     )
-
-# mesh <- make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"),mesh=inla_mesh) # this was decided based on a cross-validation exercise (see "Test Mesh Complexity" below)
-
 mesh <- make_mesh(d_obs_filt,xy_cols=c('utm.lon.km','utm.lat.km'),type='cutoff',cutoff=40)
 
 png(here('plots','selected_inla_mesh.png'),w=480,h=800,bg="transparent")
@@ -251,37 +223,7 @@ plot(mesh)
 dev.off()
 ```
 
-```{r}
-# as of 2/13/24, these were the mesh options setup that Ole is using for hake
-# locs <- d_obs_filt %>%
-#   distinct(year,station,utm.lon.km,utm.lat.km) %>% 
-#   st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
-# domain <-fmesher::fm_nonconvex_hull(locs,
-#                               concave = -0.025,
-#                               convex = -0.025)
-# 
-# inla_mesh <- fmesher::fm_mesh_2d_inla(
-#   #loc=locs[,c("utm.lon","utm.lat")],
-#   loc.domain = domain, # coordinates
-#   boundary=domain,
-#   max.edge = c(40, 1000), # max triangle edge length; inner and outer meshes
-#   offset = c(30, 80),  # inner and outer border widths
-#   #max.n.strict=100,#,
-#   cutoff = 64 , # minimum triangle edge length
-#   min.angle=20
-# )
-
-
-# 
-# mesh <- make_mesh(d_obs_filt, c("utm.lon.km", "utm.lat.km"), mesh = inla_mesh)
-# mesh2 <- make_mesh(d_obs_filt, c("utm.lon.km", "utm.lat.km"), cutoff=20)
-# mesh$mesh$n
-# mesh2$mesh$n
-# plot(mesh)
-# plot(mesh2)
-```
-
-Now we are ready to start fitting models. We do this in two stages: first, we compare model structures to pick an appropriate structural format for sdmTMB given our data. Then, we use variations on our chosen model to choose appropriate environmental covariates to choose.
+Now, with covariate data prepared and the model mesh created, we are ready to start fitting models. We do this in two stages: first, we compare model structures to pick an appropriate structural format for sdmTMB given our data. Then, we use variations on our chosen model to select appropriate environmental covariates and create the most parsimonious final model.
 
 # Fit Models
 
@@ -308,25 +250,12 @@ As a measure of model fit, we use cross-validation, with 10% of the data randoml
 ## Cross Validation Folds
 
 ```{r}
+# just for reproducibility, manually set the RNG seed
 set.seed(8913)
-# clust <-sample(seq_len(3), size = nrow(d_obs_filt), replace = TRUE)
 
+# create the folds in the data, where 10% are assigned to the test set
 clust <-sample(seq_len(2), size = nrow(d_obs_filt), replace = TRUE,prob = c(0.1,0.9))
 
-# clust <-as.integer(d_obs_filt$year==2019)+1# by year??
-# maybe do this by year and station, so we don't remove huge spatial blocks
-# hmm, and maybe we need an unbalanced sample.
-# clust <- d_obs_filt %>% group_by(year,station) %>% 
-#   mutate(cvclust=sample(seq_len(2),size=n(),replace=T)) %>% 
-#   ungroup()
-# 
-# clust %>% 
-#   ggplot(aes(utm.lon.m,utm.lat.m,color=factor(cvclust)))+
-#   geom_point()+
-#   facet_grid(year~depth_cat)+
-#   coord_equal()
-#   
-# clust <- clust %>% pull(cvclust)
 ```
 
 
@@ -337,6 +266,8 @@ source(here("scripts","plotting_utils.R"))
 
 
 ## Common Spatial Field
+
+Fit 0 is an intercept-only model with a spatial field but no environmental covariates.
 
 ```{r}
 tic("Fitting:")
@@ -371,7 +302,7 @@ toc()
 paste("CVLL:",f0_cv$fold_loglik[[1]])
 ```
 
-First, a model with just one common spatial field, and a single intercept.
+Fit 1 is a model with just one common spatial field, a single intercept, and one covariate (log temperature).
 
 ```{r}
 tic("Fitting:")
@@ -406,7 +337,7 @@ toc()
 paste("CVLL:",f1_cv$fold_loglik[[1]])
 ```
 
-One spatial field, random intercept by depth category.
+Fit 2 includes one spatial field, with random intercepts by depth category.
 
 ```{r}
 tic("Fitting:")
@@ -443,7 +374,7 @@ paste("CVLL:",f2_cv$fold_loglik[[1]])
 
 ```
 
-One spatial field, random intercept by year.
+Fit 3 includes one spatial field and random intercept by year.
 
 ```{r}
 tic("Fitting:")
@@ -478,7 +409,7 @@ toc()
 paste("CVLL:",f3_cv$fold_loglik[[1]])
 ```
 
-One spatial field, random intercept by year and depth category
+Fit 4 includes one spatial field with random intercepts by year and depth category
 
 ```{r}
 tic("Fitting:")
@@ -515,7 +446,7 @@ paste("CVLL:",f4_cv$fold_loglik[[1]])
 
 ## Spatial Field by Depth
 
-Spatial field by depth category, single intercept.
+Fit 5 includes spatial fields by depth category, but a single intercept.
 
 ```{r}
 # make dummy factors for depth categories
@@ -556,11 +487,11 @@ f5_cv <- sdmTMB_cv(
   family = stdcurve(),
   control = sdmTMBcontrol(stdcurve_df = d)
 )
-toc() # 27s on May 21, 2024
+toc() 
 paste("CVLL:",f5_cv$fold_loglik[[1]])
 ```
 
-Spatial field by depth category, random intercept by depth category. This one feels weird
+Fit 6 includes spatial fields by depth category, and random intercepts by depth category.
 
 ```{r}
 tic("Fitting:")
@@ -597,7 +528,7 @@ toc()
 paste("CVLL:",f6_cv$fold_loglik[[1]])
 ```
 
-Spatial field by depth category, random intercept by year.
+Fit 7 includes spatial field by depth category, and random intercepts by year.
 
 ```{r}
 tic("Fitting:")
@@ -635,7 +566,7 @@ paste("CVLL:",f7_cv$fold_loglik[[1]])
 ```
 
 
-Spatial field by depth category, random intercept by depth and year
+Fit 8 includes spatial fields by depth category, and random intercepts by depth and year
 
 ```{r}
 tic("Fitting:")
@@ -674,7 +605,7 @@ paste("CVLL:",f8_cv$fold_loglik[[1]])
 
 ## Spatial Field by Year
 
-Spatial field by year, single intercept.
+Fit 9 includes spatial fields by year, but a single intercept.
 
 ```{r}
 tic("Fitting: ")
@@ -711,7 +642,7 @@ toc()
 paste("CVLL:",f9_cv$fold_loglik[[1]])
 ```
 
-Spatial field by year, random intercept by depth category.
+Fit 10 includes spatial fields by year, and random intercepts by depth category.
 
 ```{r}
 tic("Fitting: ")
@@ -748,7 +679,7 @@ toc()
 paste("CVLL:",f10_cv$fold_loglik[[1]])
 ```
 
-Spatial field by year, random intercept by year.
+Fit 11 includes spatial fields by year, and random intercepts by year.
 
 ```{r}
 tic("Fitting: ")
@@ -785,7 +716,7 @@ toc()
 paste("CVLL:",f11_cv$fold_loglik[[1]])
 ```
 
-Spatial field by year, random intercept by depth and year
+Fit 12 includes spatial fields by year, and random intercepts by depth and year
 
 ```{r}
 tic("Fitting: ")
@@ -822,40 +753,17 @@ toc()
 paste("CVLL:",f12_cv$fold_loglik[[1]])
 ```
 
-Where we're at so far: models 0, 1, 3 and 4 converged with no issues, and relatively quickly, with Models 3 and 4 having the highest log-likelihood of the test set. Models 2, 5, and 6 seemingly had difficulty apportioning variance between the spatial fields and their varying representations of depth (i.e., intercepts or spatial fields by depth). They converged, but with significant warnings (see,e.g., `sanity(f5)`). Models 7-12 did not converge, which is expected to some degree as the models become more complex.
-
-# Conditional Effects
-
-We can look at the estimated effects of temperature on our estimates of eulachon eDNA, conditional on all other variable being held at their means. For now, we use a range of models that converged, and whose diagnostic plots above (e.g. standard curve fits) look reasonable.
-
-
-## Temperature
-
-```{r}
-thetao.cond <- purrr::map2_df(list(f0,f1,f3,f4),c("f0","f1","f3","f4"),function(m,n){
-  pr <- make_cond_plot(m,thetao_ln,exp_var = F,return_dat=T,saveplot = F)
-  pr %>% mutate(model=n)
-})
-
-thetao.cond.p <- thetao.cond %>%   
-  ggplot(aes(thetao_ln, exp(est),ymin=ymin,ymax=ymax,
-  fill=model
-)) +
-  geom_line() +
-  geom_ribbon(alpha = 0.4) +
-  coord_cartesian(expand = F) +
-  facet_wrap(~model)+
-  labs(x = "Temperature (C)", y = "eDNA conc.",title="Conditional Effect of Temperature")
-thetao.cond.p
-```
+After fitting all of these candidate models, models 0, 1, 3 and 4 converged with no issues, and relatively quickly, with Models 3 and 4 having the highest log-likelihood of the test set. Models 2, 5, and 6 seemingly had difficulty apportioning variance between the spatial fields and their varying representations of depth (i.e., intercepts or spatial fields by depth). They converged, but with significant warnings (see,e.g., `sanity(f5)`). Models 7-12 did not converge, which is expected to some degree as the models become more complex and the data do not support that level of complexity.
 
 # Variable Selection
 
-Now that we have tested the different model structures, we can choose a preferred model and then try different environmental covariates. We have temperature, depth, salinity, and then the krill metrics. We'll choose three of our highest-likelihood cross-validated fitted models for this exercise, which were Model 1 (single intercept and common spatial field across depths and years) Model 3 (common spatial field, intercept by year), and Model 4 (common spatial field, intercepts by depth category and year).
+Now that we have tested the different model structures, we can choose a preferred model and then try different environmental covariates. We have temperature, depth, salinity, and the various krill metrics. We'll choose three of our highest-likelihood cross-validated fitted models for this exercise, which were Model 1 (single intercept and common spatial field across depths and years) Model 3 (common spatial field, intercept by year), and Model 4 (common spatial field, intercepts by depth category and year).
 
 We use cross-validation again to evaluate whether to include each variable. We try all combinations of temperature, depth, river input, and salinity, but choose only one krill metric.
 
 ## Abiotic variables
+
+Make a table of combinations of variables to test in the 3 models.
 
 ```{r}
 # Formulas to try (with different variables)
@@ -893,13 +801,7 @@ test_covariates_f1 <- function(v){
     print(paste('Error.'))
     return(NA_real_)
   } else{
-    # sum_loglik = fit %>% 
-    #   pluck('data') %>% 
-    #   dplyr::filter(cv_fold==2) %>% 
-    #   pluck('cv_loglik') %>% 
-    #   sum()
-  # print("CVLL:",fit$sum_loglik)
-    # return(fit$sum_loglik)
+
     return(fit$fold_loglik[[1]])
   }
   toc()
@@ -931,12 +833,7 @@ test_covariates_f3 <- function(v){
     print(paste('Error.'))
     return(NA_real_)
   } else{
-    # sum_loglik = fit %>% 
-    #   pluck('data') %>% 
-    #   dplyr::filter(cv_fold==2) %>% 
-    #   pluck('cv_loglik') %>% 
-    #   sum()
-    # return(fit$sum_loglik)
+    
     return(fit$fold_loglik[[1]])
   }
   toc()
@@ -969,18 +866,14 @@ test_covariates_f4 <- function(v){
     print(paste('Error.'))
     return(NA_real_)
   } else{
-    # sum_loglik = fit %>% 
-    #   pluck('data') %>% 
-    #   dplyr::filter(cv_fold==2) %>% 
-    #   pluck('cv_loglik') %>% 
-    #   sum()
-  # print("CVLL:",m_cv$sum_loglik)
-    # return(fit$sum_loglik)
+    
     return(fit$fold_loglik[[1]])
   }
   toc()
 }
 ```
+
+Run the tests
 
 ```{r}
 # for Model 1
@@ -1026,6 +919,7 @@ vs2_p <- tibble(model_number=1:6,vars=kvars_combs,f1=f1_kvar_ll,f3=f3_kvar_ll,f4
   labs(x="Model Number",y="Sum LL")
 vs2_p
 ```
+
 These actually improve our cross-validation likelihood values, particularly variables k3, k4, and k5. Now, the highest-likelihood model is Model 3, with `k4_ln` and `thetao_ln` as predictors.
 
 # Chosen Model
@@ -1055,11 +949,11 @@ make_pred_obs_plots(m,d,model_name="Model 1",saveplots = T,savetype = 'png')
 Choose temperature and k4; this is what the conditional effects look like in the chosen model.
 
 ```{r,fig.height=6,fig.width=4}
-mconds_thetao <- plot_marginal(m,varname="thetao")+labs(x="Depth-matched Temperature")
-mconds_k4 <- plot_marginal(m,varname="k4")+labs(x="Depth-integrated Krill Index")
+mconds_thetao <- plot_marginal(m,varname="thetao")
+mconds_k4 <- plot_marginal(m,varname="k4")
 
-mod1_covar_cond_effs <- cowplot::plot_grid(mconds_thetao,mconds_k4,nrow=2,labels='auto')
-ggsave(here('plots','Model 1 Conditional Covariate Effects.png'),mod1_covar_cond_effs,w=4,h=6,bg='white')
+mod1_covar_cond_effs <- cowplot::plot_grid(mconds_thetao,mconds_k4,nrow=2)
+mod1_covar_cond_effs
 ```
 
 
@@ -1084,13 +978,11 @@ m_abun_lat
 lat_abun_river_disc_p <- plot_grid(m_abun_lat,river_disc_p,nrow=1,rel_widths=c(2,1),labels=c("a","b"))
 
 lat_abun_river_disc_p
-ggsave(here('plots','Model 1 Abundance Index.png'),m_abun,w=6,h=8,bg = "white")
-ggsave(here('plots','Model 1 Abundance Index and River Discharge.png'),lat_abun_river_disc_p,w=8,h=6,bg = "white")
 ```
 
 # Make Maps
 
-We can make maps of predicted eulachon eDNA with these models.
+We can make maps of predicted eulachon eDNA with our chosen model.
 
 ## Covariates Maps
 
@@ -1105,11 +997,9 @@ k4_plot <- make_map(grid.pred,log(k4))+
   labs(title="Krill Metric 4 (log)")
 thetao_plot
 k4_plot
-
-ggsave(here('plots','temperature_by_depth_year_map.png'),thetao_plot,w=6,h=10)
-ggsave(here('plots','krill_metric2_by_year_map.png'),k4_plot,w=6,h=10)
 ```
 
+Spatial bounding boxes for different regions of the coast (for plotting)
 
 ```{r}
 # if we want to zoom in on particular regions
@@ -1145,7 +1035,6 @@ make_map(m.preds,est)+
     scale_fill_viridis(option="D")+
   labs(title="Model 1",fill="ln(eDNA)",x="",y="")+
   theme(axis.text.x=element_blank())
-ggsave(here('plots','Model 1 coastwide.png'),w=6,h=5,bg='white')
 
 make_map(m.preds,est_non_rf)+ #tidy(m,'fixed')
     scale_fill_viridis(option="D")+
@@ -1158,41 +1047,29 @@ make_map(m.preds,est_rf)+ #tidy(m,'ran_pars')
 make_map_bathy(m.preds,est)+
     scale_fill_viridis(option="d")+
   labs(title="Model 1",fill="ln(eDNA)")
+
 make_map_bathy(m.preds,est)+
     scale_fill_viridis(option="D")+
   labs(title="Model 1",fill="ln(eDNA)",x="",y="")+
   ylim(orbbox[c(2,4)])+xlim(orbbox[c(1,3)])
-ggsave(here('plots','Model 1 Oregon.png'),w=6,h=5,bg="white")
+
 make_map_bathy(m.preds,est)+
     scale_fill_viridis(option="D")+
   labs(title="Model 1",fill="ln(eDNA)",x="",y="")+
   ylim(wabbox[c(2,4)])+xlim(wabbox[c(1,3)])
-ggsave(here('plots','Model 1 Washington.png'),w=6,h=5,bg="white")
 
 make_map_bathy(m.preds,est)+
     scale_fill_viridis(option="D")+
   labs(title="",fill="ln(eDNA)",x="",y="")+
   ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])+
   coord_sf(datum=NA)
-ggsave(here('plots','Model 1 WA and OR.png'),w=6,h=8,bg="white")
 
 make_map_bathy(m.preds,est)+
     scale_fill_viridis(option="D")+
   labs(title="Model 1",fill="ln(eDNA)",x="",y="")+
   ylim(cabbox[c(2,4)])+xlim(cabbox[c(1,3)])
-ggsave(here('plots','Model 1 California.png'),w=6,h=5,bg="white")
 
-# quantiles?
-
-# m.preds %>% 
-#   arrange(est) %>% 
-#   mutate(quantest=ntile(est,100)) %>% 
-#   mutate(quantcut=cut(quantest,20)) %>% 
-#   make_map(quantcut)+
-#   ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])+
-#   scale_fill_viridis(option='D',discrete=T)+
-#     # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
-#   labs(title="Model 1",fill="Quantile (eDNA)")
+# quantiles instead of log copies
 m.preds %>% 
   arrange(est) %>% 
   mutate(quantest=percent_rank(est)*100) %>% 
@@ -1201,90 +1078,29 @@ m.preds %>%
   scale_fill_viridis(option='D',discrete=F)+
     # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
   labs(title="Model 1",fill="Quantile (eDNA)")
-ggsave(here('plots','Model 1 Quantiles WA and OR.png'),w=6,h=8,bg="white")
 
-#presence/absence
+#presence/absence only
 m.pa.map <- make_presence_absence_map(m)[[2]]+labs(x="",y="")+
   ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])
-ggsave(here('plots','Model 1 presence absence.png'),m.pa.map,w=6,h=5,bg="white")
 ```
-```{r}
-#depth-depth plot?
-depth_depth_p <- m.preds %>% 
-  filter(bathy.bottom.depth<1500) %>% 
-  ggplot(aes(bathy.bottom.depth,exp(est),color=factor(year)))+
-  geom_point()+facet_wrap(~depth_cat)
-depth_depth_p
-```
-
-
-# Post-hoc Comparison
-
-Compare our output to river input layer.
-
-```{r}
-m.preds.rivers <- m.preds %>% left_join(riverine_influence) %>% 
-  ggplot(aes(river_input,est))+
-  geom_point()+
-  facet_grid(year~depth_cat,scales='free_x')+
-  geom_smooth()
-m.preds.rivers
-```
-
 
 # Test Mesh Complexity
 
 One thing that seems to have an effect on our fits is the configuration of the INLA mesh, particularly its complexity, or number of knots. Meshes that are too complex can make pretty maps, but we run the risk of overfitting. As a general rule of thumb, we want to pick a less complex mesh, but one that still allows us to make good predictions. Let's see if we can use cross-validation likelihoods to assess which mesh to use.
 
 ```{r}
-# we are using a combined INLA/sdmTMB workflow to make these meshes. We will vary the "cutoff", which determines the minimum triangle edge length, and in practice determines the number of vertices in the mesh
-# locs <- d_obs_filt %>%
-#   distinct(year,station,utm.lon.km,utm.lat.km) %>%
-#   st_as_sf(coords=c("utm.lon.km", "utm.lat.km"))
-# 
-# max.edge = diff(range(st_coordinates(locs)[,1]))/4
-# bound.outer = diff(range(st_coordinates(locs)[,1]))/3
-# 
-# domain <-fmesher::fm_nonconvex_hull(locs,
-#                               concave = -0.025,
-#                               convex = -0.025)
-# make_test_mesh <- function(test_cutoff){
-#   testmesh <- fmesher::fm_mesh_2d_inla(
-#     #loc=locs[,c("utm.lon","utm.lat")],
-#     loc.domain = domain, # coordinates
-#     boundary=domain,
-#     max.edge = c(max.edge,max.edge*2), # max triangle edge length; inner and outer meshes
-#     offset = c(max.edge, bound.outer),  # inner and outer border widths
-#     #max.n.strict=100,#,
-#     min.angle=15,
-#     cutoff = test_cutoff # minimum triangle edge length
-#     )
-#   make_mesh(d_obs_filt,c("utm.lon.km","utm.lat.km"),mesh=testmesh)
-# }
-# 
-# # let's make a series of meshes of increasing complexity, then fit our model and test its likelihood
-# cutoffs_to_try <- seq(2,20,by=2)
-# meshes <- map(cutoffs_to_try,make_test_mesh)
-# knots_to_try <- seq(50,175,by=25)
-# meshes <- map(knots_to_try,~make_mesh(d_obs_filt,c("utm.lon.km", "utm.lat.km"),n_knots=.x))
-# map(meshes,plot)
-```
-
-```{r}
 cutoffs_to_try = seq(10,160,by=10)
 meshestest <- map(cutoffs_to_try,function(cuts) make_mesh(d_obs_filt,xy_cols=c('utm.lon.km','utm.lat.km'),type='cutoff',cutoff=cuts))
 ```
 
-
 Now try to fit the same model on each mesh. Because we've noticed a tradeoff in covariate number and mesh complexity (including lots of non-convergence if a mesh is too complex combined with many predictors), we test this with a model that includes 3 environmental covariates.
 
 ```{r}
+# Function to run a model using a candidate mesh
 calc_mesh_ll <- function(testmesh){
   meshn=testmesh$mesh$n
   fit <- try(sdmTMB_cv(
-    # Ct ~ 1+thetao_ln + I(thetao_ln^2)+washed,
-    # Ct ~ 1+s(thetao_ln,k=3)+washed,
-    Ct ~ 1+washed+s(thetao_ln,k=3)+s(k4_ln,k=3),
+    Ct ~ 1+washed+s(thetao_ln,k=3)+s(bathy.bottom.depth_ln,k=3)+s(k5_ln,k=3),
     data = d_obs_filt,
     mesh = testmesh,
     offset= "offsets_all",
@@ -1306,13 +1122,7 @@ calc_mesh_ll <- function(testmesh){
     return(NA_real_)
   } else{
     print(paste("Mesh with", meshn, "vertices worked."))
-    # sum_loglik = fit %>% 
-    #   pluck('data') %>% 
-    #   dplyr::filter(cv_fold==2) %>% 
-    #   pluck('cv_loglik') %>% 
-    #   sum()
-  # print("CVLL:",m_cv$sum_loglik)
-    # return(fit$sum_loglik)
+
     return(fit$fold_loglik[[1]])
   }
 }
@@ -1320,6 +1130,7 @@ calc_mesh_ll <- function(testmesh){
 
 
 ```{r}
+# now, test the meshes
 tic("CV mesh analysis")
 meshes.ll.test <- map_dbl(meshestest,calc_mesh_ll)
 toc()
@@ -1364,95 +1175,5 @@ meshes.p
 
 # ggsave(here('plots','mesh_complexity_test.png'),meshes.p,h=4,w=7,bg='white')
 ```
+
 After testing multiple meshes with models of different complexity in covariates, it seems that the mesh with 118 knots and a cutoff (minimum interior edge length) of 40km works well for both simple and slightly more complex models, and therefore represents a balance of our needs here. We choose to move forward with this mesh.
-
-# Scratch
-
-## Meshes
-
-```{r}
-# try simpler meshes
-meshestest <- map(c(seq(2,10,by=2),seq(20,180,by=20)),function(cuts) make_mesh(d_obs_filt,xy_cols=c('utm.lon.km','utm.lat.km'),type='cutoff',cutoff=cuts))
-
-# let's make a series of meshes of increasing complexity, then fit our model and test its likelihood
-meshes.ll.test <- map_dbl(meshestest,calc_mesh_ll)
-```
-
-```{r}
-test_cuts <- c(seq(2,10,by=2),seq(20,180,by=20))
-mesh.comparison <- tibble(cutoff=test_cuts,sumll=c(meshes.ll.test)) %>% 
-  ggplot(aes(cutoff,sumll))+
-  geom_line()+
-  geom_point()+
-  # stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1,se=F)+
-  geom_smooth(se=F)+
-  labs(x="Minimum Interior Edge Length",y="Summed Log Likelihood")
-mesh.comparison
-
-mesh.comparison2 <- tibble(cutoff=test_cuts,sumll=meshes.ll.test) %>% 
-  mutate(nverts=map_dbl(meshestest,~.$mesh$n)) %>% 
-  ggplot(aes(nverts,sumll))+
-  geom_line()+
-  geom_point()+
-  geom_smooth(se=F)+
-  # stat_smooth(method = "lm", formula = y ~ x + I(x^2), size = 1,se=F)+
-  # scale_x_continuous(limits=c(100,400),breaks=seq(100,400,by=100))+
-  labs(x="Number of Vertices",y="Summed Log Likelihood")
-mesh.comparison2
-
-meshes_table <- tibble(cutoffs_to_try=test_cuts,sumll=meshes.ll.test) %>% 
-  mutate(nverts=map_dbl(meshestest,~.$mesh$n))
-
-meshes.edges.nverts <- meshes_table%>% 
-  ggplot(aes(cutoffs_to_try,nverts))+
-  # geom_line()+
-  geom_point()+
-  labs(y="Number of Vertices",x="Minimum Interior Edge Length")
-
-meshes.p <-plot_grid(mesh.comparison,mesh.comparison2,nrow=1)
-
-meshes.edges.nverts
-meshes.p
-```
-
-```{r}
-#trying priors on standard curves
-# k <- tibble(par=names(f4$sd_report$value),val=f4$sd_report$value)
-ftest <- sdmTMB(
-  Ct ~ 1+thetao_ln + I(thetao_ln^2)+washed,
-  data = d_obs_filt,
-  mesh = meshestest[[6]],
-  offset= "offsets_all",
-  spatial="on",
-  spatiotemporal = "off",
-  time=NULL,
-  family = stdcurve(),
-  control = sdmTMBcontrol(stdcurve_df = d)
-)
-make_cond_plot(ftest,thetao_ln)
-```
-
-## Map Transformations
-
-```{r}
-test<- m.preds %>% 
-  arrange(est) %>% 
-  mutate(quantest=percent_rank(est)) %>% 
-  make_map(quantest)+
-  ylim(wobbox[c(2,4)])+xlim(wobbox[c(1,3)])+
-  scale_fill_viridis(option='D',discrete=F)+
-    # scale_fill_manual(breaks=seq(0,1,by=0.1),values=viridis_pal(option="C")(11))+
-  labs(title="Model 1",fill="Quantile (eDNA)")
-test
-```
-
-## Time of Day
-
-```{r,fig.height=8,fig.width=6}
-# times (I think) are in UTC, so subtract 7 to get to PDT
-tod <- d_obs_filt %>% select(year,time,depth_cat,Ct) %>% mutate(hour=hour(time)-7) %>% mutate(hour=ifelse(hour<0,24+hour,hour)) %>% group_by(year,depth_cat,hour) %>% summarise(amped=sum(Ct>0),tot=n()) %>% mutate(probamp=amped/tot)
-
-tod %>% filter(tot>2) %>% ggplot(aes(hour,probamp,group=year,fill=factor(year)))+geom_col(position='dodge')+geom_rug(sides='b')+facet_wrap(~depth_cat,nrow=3,scales='free')+
-  scale_x_continuous(breaks=seq(0,24,by=1))+labs(y="Proportion Amplified",fill="Year")
-```
-

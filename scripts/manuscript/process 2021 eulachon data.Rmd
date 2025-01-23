@@ -1,0 +1,335 @@
+---
+title: "Process 2021 eDNA Data- Eulachon"
+author: "Owen R. Liu"
+date: "2023-10-16"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(marmap)
+library(ggplot2)
+library(ggpubr)
+library(rstan)
+library(lubridate)
+library(gridExtra)
+library(sf)
+library(brms)
+library(loo)
+library(here)
+library(rnaturalearth)
+library(viridis)
+library(units)
+library(terra)
+options(dplyr.summarise.inform=FALSE)
+```
+
+# Purpose
+
+The goal of this script is to clean processed qPCR eDNA data from the 2021 hake survey. Overall, we clean the eDNA qPCR results, join location and spatial covariate data from related datasets, and join data from the qPCR standard curves. In the second major portion of the processing, we produce forms of the data that will be used in the Stan model of hake biomass.
+
+# Import Data
+
+First, we import "raw" forms of the data.
+
+```{r import raw data}
+# Pull in qPCR data, qPCR standards, sample id information
+dat.all <- read_csv(here('data','qPCR','Hake eDNA 2021 qPCR results 10.13.2023.csv'))
+dat.stand <- read_csv(here('data','qPCR','Hake eDNA 2021 qPCR standards 10.13.2023.csv'))
+dat.sample.id <- read_csv(here('data','qPCR','Hake eDNA 2021 qPCR sample details 10.16.2023.csv'),skip=2)
+dat.station.id <- read_csv(here('data','CTD meta 2021.csv'))
+```
+
+# Process CTD
+
+First, process the location and sample identifier information from CTD casts.
+
+```{r clean ctd}
+# Look at the data
+glimpse(dat.station.id)
+dat.station.id <- dat.station.id %>% 
+  rename(station_id=`Station ID`,filename=`File name`,date=UTCDate, time=UTCTime,lat=Latitude,lon=Longitude) %>% 
+  mutate(year=year(date),month=month(date),day=day(date))
+
+glimpse(dat.station.id)
+```
+
+```{r}
+# Duplicate station IDs
+dat.station.id %>% count(station_id) %>% 
+  filter(n>1)
+
+# two "real" stations (x51_500 and x57_50) seem to have multiple samples. Look at them
+station.id.dupes <- dat.station.id %>% 
+  filter(station_id %in% c("x51_500","x57_50"))
+
+# are these going to mess up our matching?
+station.dupes.samps <- dat.sample.id %>% filter(`CTD cast`%in% c("x51_500","x57_50"))
+
+# yes, so for now just filter so we keep just the first cast
+dat.station.id <- dat.station.id %>% 
+  group_by(station_id) %>% 
+  slice(1) %>% 
+  ungroup()
+# now, all station IDs in this table are unique (1 row per station_ID)
+```
+
+Add a transect identifier
+
+```{r add transects}
+dat.station.id <- dat.station.id %>% 
+  mutate(transect=str_split_i(station_id,"_",1) %>% str_to_lower()) %>% 
+  mutate(transect=ifelse(grepl('^x',transect),str_replace(transect,"x",""),transect)) %>% 
+  mutate(transect=as.integer(transect))
+
+## NAs introduced here- okay because some obs aren't associated with a transect(e.g., calibration controls)
+station.NAs <- dat.station.id %>% filter(is.na(transect))
+station.NAs
+```
+
+## MarMap Depth
+
+Attach depth from NOAA bathymetry
+
+```{r bathy}
+### Go get bathymetric data from NOAA to overlay on the transects.
+limits.for.map <- dat.station.id %>% 
+  st_as_sf(coords=c('lon','lat'),crs=4326) %>% 
+  st_bbox()+c(-1,-1,1,1) #add an extra degree on each side for buffer
+  
+
+b = getNOAA.bathy(lon1 = limits.for.map["xmin"],
+          lon2 = limits.for.map[ "xmax" ],
+          lat1 = limits.for.map["ymin"],
+          lat2 = limits.for.map["ymax"],
+          resolution = 1,keep = TRUE)
+```
+
+```{r get sample depth}
+# We can pull depth from each sample point
+stations.bathy <- get.depth(b,x=dat.station.id %>% 
+                              dplyr::select(lon,lat),locator=F) %>% 
+  rename(bathy.bottom.depth=depth) %>% 
+  distinct()
+
+dat.station.id <- dat.station.id %>% left_join(stations.bathy,by=join_by(lat,lon))
+```
+
+Clean up columns of sample ID table
+
+```{r}
+dat.sample.id  <- dat.sample.id %>% 
+  dplyr::select(sample=`Tube #`,
+                station=`CTD cast`,
+                Niskin,
+                depth,
+                drop.sample,
+                field.negative.type,
+                volume = water.filtered.L)
+```
+
+# Projection Grid Info
+
+Pull in and create spatial grid to project on.
+
+## 5km Grid Depth
+
+```{r}
+# 5km gridraster with just grid cell ID numbers
+dat_raster=rast(here('data','raster_grid','fivekm_grid.tif'))
+
+# Depth associated with grid cell IDs
+raster_depth <- read_csv(here('Data','raster_grid_blake','weighted_mean_NGDC_depths_for_5km_gridcells.csv')) %>% 
+  rename(depth_m=WM_depth_m)
+
+# join depths to cell numbers
+cellnums <- tibble(rastID=as.numeric(values(dat_raster))) %>% 
+  mutate(rastcell=row_number()) %>% 
+  left_join(raster_depth,by=c("rastID"="Gridcell_ID"))
+
+# make bathy raster
+rast_depth <- setValues(dat_raster,cellnums$depth_m)
+plot(rast_depth)
+```
+
+Convert spatial reference for station IDs to the same spatial projection as the grid raster
+
+```{r}
+dat.station.id.proj <- dat.station.id %>% 
+  # convert to sf object for quick and easy spatial transformation
+  st_as_sf(coords=c('lon','lat'),crs=4326,remove=F) %>% 
+  # project to the same CRS as Blake's raster
+  st_transform(crs(dat_raster)) %>% 
+  mutate(utm.lon.m=st_coordinates(.)[,1],
+         utm.lat.m=st_coordinates(.)[,2]) %>% 
+  # convert back to a non-spatial df
+  st_set_geometry(NULL)
+glimpse(dat.station.id.proj)
+```
+
+## Distance Along Transect
+
+Calculate a distance along each individual transect, starting from the observation closest to shore/shallowest
+
+```{r}
+transect_dists <- dat.station.id.proj %>% 
+  distinct(transect,utm.lon.m,utm.lat.m,.keep_all = T) %>% 
+  filter(!is.na(transect))
+
+# function to calculate this for a subset of rows representing 1 transect
+calc_transect_distance <- function(transect_df){
+  transect_sf <- transect_df %>% 
+    # arrange by longitude
+    arrange(desc(utm.lon.m)) %>% 
+    st_as_sf(coords=c('utm.lon.m','utm.lat.m'),crs=crs(dat_raster))
+  # transect start is assumed to be the observation with the eastern-most longitude
+  transect_start <- transect_sf %>% slice_head(n=1)
+  # calculate distances in meters from the start
+  dists <- st_distance(transect_sf,transect_start)
+  
+  # add the distances back to the transect data and return
+  transect_sf %>% 
+    mutate(transect_dist_m=dists[,1]) %>% 
+    st_set_geometry(NULL)
+}
+
+# apply
+transect_dists <- transect_dists %>% 
+  group_split(transect) %>% 
+  purrr::map_df(calc_transect_distance)
+
+# join to other samples (incl. non-transect samples like controls)
+dat.station.id.proj <- dat.station.id.proj %>% 
+  left_join(transect_dists,by=join_by(station_id, filename, date, time, lat, lon, year, month, day, transect, bathy.bottom.depth)) %>% 
+  mutate(station_id=tolower(station_id))
+```
+
+# Join Samples and Stations
+
+Join the sample ID and station ID information that we have cleaned so far. First pull out some degenerate rows.
+
+```{r filter sampleid}
+# Filter sample ID info for those obs associated with a direct station, and those that aren't (e.g., different kinds of calibration and controls)
+samples.no.station <- dat.sample.id %>% 
+  filter(station=="N/A"|station=="-")
+glimpse(samples.no.station)
+dat.sample.id.filt <- dat.sample.id %>% 
+  filter(!(station=="N/A"|station=="-"))
+```
+
+```{r filter stationid}
+# Do the same for the station ID dataframe
+# unique(dat.station.id.proj$station_id)
+station.id.NAs <- dat.station.id.proj %>% 
+  filter(!grepl("x",station_id))
+glimpse(station.id.NAs)
+dat.station.id.filt <- dat.station.id.proj %>% 
+  filter(grepl("x",station_id))
+```
+
+Now join the two filtered datasets
+
+```{r}
+dat.id <- dat.sample.id.filt %>%
+  left_join(dat.station.id.filt,by=c("station"="station_id")) %>%
+  mutate(depth = case_when(depth=="-" ~ "-99",
+                           depth=="sfc" ~ "0",
+                           depth=="300/150" ~ "300",
+                           depth=="" ~ "0",
+                           TRUE ~depth))
+
+# check the many-to-many matches
+# matchcheck <- dat.id %>% group_by(sample) %>% mutate(nobs=n()) %>% filter(nobs>1)
+```
+
+# Process Standards
+
+```{r}
+glimpse(dat.stand)
+# fix some columns
+dat.stand <- dat.stand %>% 
+  dplyr::select(qPCR,well,sample,IPC_Ct,inhibition_rate,task,contains('eulachon')) %>% 
+  rename(Ct='eulachon_Ct',
+         copies_ul='eulachon_copies_ul')
+
+# data with task "UNKNOWN"
+unknown.task <- dat.stand %>% filter(task=="UNKNOWN")
+# data with undetermined Ct
+undetermined.Ct <- dat.stand %>% filter(Ct=="Undetermined")
+
+# mark these as "-99"
+dat.stand <- dat.stand %>% 
+  mutate(Ct=ifelse(Ct=="Undetermined","-99",Ct)) %>% 
+  # add useful data transformed vars
+  mutate(Ct=as.numeric(Ct),Ct_bin=ifelse(Ct>0,1,0),log10_copies=log10(copies_ul)) %>% 
+  group_by(qPCR) %>% 
+  # add an id number for each qPCR
+  mutate(plate_idx=cur_group_id()) %>% 
+  ungroup()
+```
+
+Count samples and make sure there are enough for each qPCR
+
+```{r}
+# Make sure there are sufficient samples for each qPCR
+stand.summary <- dat.stand %>% count(qPCR,copies_ul,name="N")
+glimpse(stand.summary)
+```
+
+## Save
+
+```{r}
+write_rds(dat.stand,here('data','qPCR','eulachon qPCR 2021 standards cleaned 11_20_2023.rds'))
+```
+
+
+# Process Samples
+
+Organize the actual samples, including real samples, controls, and non-template controls
+
+```{r}
+dat.samp <- dat.all %>% 
+  dplyr::select(qPCR,well,sample,IPC_Ct,inhibition_rate,task,Zymo,dilution,contains('eulachon')) %>%
+  rename(Ct='eulachon_Ct',copies_ul = 'eulachon_copies_ul') %>%
+  mutate(Ct=ifelse(Ct=="",-99,Ct),
+         Ct=ifelse(Ct=="Undetermined",-99,Ct),
+         Ct=ifelse(is.na(Ct),-99,Ct), 
+         Ct=as.numeric(Ct)) %>%
+  mutate(IPC_Ct = as.character(IPC_Ct),
+        IPC_Ct=ifelse(IPC_Ct=="",-99,IPC_Ct),
+        IPC_Ct=ifelse(IPC_Ct=="Undetermined",-99,IPC_Ct),
+        IPC_Ct=ifelse(is.na(IPC_Ct)==T,-99,IPC_Ct), 
+        IPC_Ct=as.numeric(IPC_Ct))
+
+glimpse(dat.samp)
+```
+
+## Join IDs to Samples
+
+```{r}
+# add depth categories
+dat.samp <- dat.samp %>% 
+  left_join(dat.id,by='sample') %>% 
+  mutate(depth=as.numeric(depth)) %>% 
+  mutate(depth_cat=case_when(depth < 25 ~ 0,
+                            depth ==25 ~ 25,  
+                            depth > 25  & depth <= 60  ~ 50,
+                            depth > 60  & depth <= 100 ~ 100,
+                            depth > 119 & depth <= 150 ~ 150,
+                            depth > 151 & depth <= 200 ~ 200,
+                            depth > 240 & depth <= 350 ~ 300,
+                            depth > 400 & depth <= 500 ~ 500))
+
+# no station info
+dat.noID <- dat.samp %>% filter(is.na(station))
+```
+
+## Save
+
+```{r}
+write_rds(dat.samp,here('data','qPCR','eulachon qPCR 2021 joined cleaned.rds'))
+```

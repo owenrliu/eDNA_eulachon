@@ -1512,12 +1512,12 @@ CTD casts.</p>
 glimpse(dat.station.id)</code></pre>
 <pre><code>## Rows: 215
 ## Columns: 6
-## $ `Station ID` [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;Precalibration&quot;, &quot;Precalibration&quot;, &quot;Postcalibration&quot;, &quot;X1_150&quot;, &quot;X1_300&quot;, &quot;X1_500&quot;, &quot;X1_500.1&quot;, &quot;X3_50&quot;, &quot;X3…
-## $ `File name`  [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;000.hdr&quot;, &quot;001.hdr&quot;, &quot;002.hdr&quot;, &quot;003.hdr&quot;, &quot;004.hdr&quot;, &quot;005.hdr&quot;, &quot;006.hdr&quot;, &quot;007.hdr&quot;, &quot;008.hdr&quot;, &quot;009.hdr&quot;,…
-## $ UTCDate      [3m[38;5;246m&lt;date&gt;[39m[23m 2021-06-30, 2021-06-30, 2021-06-30, 2021-07-02, 2021-07-02, 2021-07-02, 2021-07-02, 2021-07-03, 2021-07-03, …
-## $ UTCTime      [3m[38;5;246m&lt;time&gt;[39m[23m 16:19:35, 17:11:53, 22:02:40, 06:48:06, 07:38:56, 08:39:04, 10:00:26, 05:34:55, 06:53:00, 07:52:55, 09:21:14…
-## $ Latitude     [3m[38;5;246m&lt;dbl&gt;[39m[23m 36.63733, 36.63733, 36.63750, 34.44383, 34.44583, 34.44517, 34.44783, 34.77833, 34.77800, 34.77983, 34.78033,…
-## $ Longitude    [3m[38;5;246m&lt;dbl&gt;[39m[23m -121.8855, -121.8855, -121.8855, -120.6200, -120.6710, -120.7378, -120.8265, -120.6950, -120.8528, -120.9350,…</code></pre>
+## $ `Station ID` &lt;chr&gt; &quot;Precalibration&quot;, &quot;Precalibration&quot;, &quot;Postcalibration&quot;, &quot;X1_150&quot;, &quot;X1_300&quot;, &quot;X1_500&quot;, &quot;X1_500.…
+## $ `File name`  &lt;chr&gt; &quot;000.hdr&quot;, &quot;001.hdr&quot;, &quot;002.hdr&quot;, &quot;003.hdr&quot;, &quot;004.hdr&quot;, &quot;005.hdr&quot;, &quot;006.hdr&quot;, &quot;007.hdr&quot;, &quot;008.…
+## $ UTCDate      &lt;date&gt; 2021-06-30, 2021-06-30, 2021-06-30, 2021-07-02, 2021-07-02, 2021-07-02, 2021-07-02, 2021-07-…
+## $ UTCTime      &lt;time&gt; 16:19:35, 17:11:53, 22:02:40, 06:48:06, 07:38:56, 08:39:04, 10:00:26, 05:34:55, 06:53:00, 07…
+## $ Latitude     &lt;dbl&gt; 36.63733, 36.63733, 36.63750, 34.44383, 34.44583, 34.44517, 34.44783, 34.77833, 34.77800, 34.…
+## $ Longitude    &lt;dbl&gt; -121.8855, -121.8855, -121.8855, -120.6200, -120.6710, -120.7378, -120.8265, -120.6950, -120.…</code></pre>
 <pre class="r"><code>dat.station.id &lt;- dat.station.id %&gt;% 
   rename(station_id=`Station ID`,filename=`File name`,date=UTCDate, time=UTCTime,lat=Latitude,lon=Longitude) %&gt;% 
   mutate(year=year(date),month=month(date),day=day(date))
@@ -1525,15 +1525,15 @@ glimpse(dat.station.id)</code></pre>
 glimpse(dat.station.id)</code></pre>
 <pre><code>## Rows: 215
 ## Columns: 9
-## $ station_id [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;Precalibration&quot;, &quot;Precalibration&quot;, &quot;Postcalibration&quot;, &quot;X1_150&quot;, &quot;X1_300&quot;, &quot;X1_500&quot;, &quot;X1_500.1&quot;, &quot;X3_50&quot;, &quot;X3_1…
-## $ filename   [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;000.hdr&quot;, &quot;001.hdr&quot;, &quot;002.hdr&quot;, &quot;003.hdr&quot;, &quot;004.hdr&quot;, &quot;005.hdr&quot;, &quot;006.hdr&quot;, &quot;007.hdr&quot;, &quot;008.hdr&quot;, &quot;009.hdr&quot;, &quot;…
-## $ date       [3m[38;5;246m&lt;date&gt;[39m[23m 2021-06-30, 2021-06-30, 2021-06-30, 2021-07-02, 2021-07-02, 2021-07-02, 2021-07-02, 2021-07-03, 2021-07-03, 20…
-## $ time       [3m[38;5;246m&lt;time&gt;[39m[23m 16:19:35, 17:11:53, 22:02:40, 06:48:06, 07:38:56, 08:39:04, 10:00:26, 05:34:55, 06:53:00, 07:52:55, 09:21:14, …
-## $ lat        [3m[38;5;246m&lt;dbl&gt;[39m[23m 36.63733, 36.63733, 36.63750, 34.44383, 34.44583, 34.44517, 34.44783, 34.77833, 34.77800, 34.77983, 34.78033, 3…
-## $ lon        [3m[38;5;246m&lt;dbl&gt;[39m[23m -121.8855, -121.8855, -121.8855, -120.6200, -120.6710, -120.7378, -120.8265, -120.6950, -120.8528, -120.9350, -…
-## $ year       [3m[38;5;246m&lt;dbl&gt;[39m[23m 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 202…
-## $ month      [3m[38;5;246m&lt;dbl&gt;[39m[23m 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, …
-## $ day        [3m[38;5;246m&lt;int&gt;[39m[23m 30, 30, 30, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 8, 8, 8, 8, 9, 9, 9, 9, 9, …</code></pre>
+## $ station_id &lt;chr&gt; &quot;Precalibration&quot;, &quot;Precalibration&quot;, &quot;Postcalibration&quot;, &quot;X1_150&quot;, &quot;X1_300&quot;, &quot;X1_500&quot;, &quot;X1_500.1&quot;…
+## $ filename   &lt;chr&gt; &quot;000.hdr&quot;, &quot;001.hdr&quot;, &quot;002.hdr&quot;, &quot;003.hdr&quot;, &quot;004.hdr&quot;, &quot;005.hdr&quot;, &quot;006.hdr&quot;, &quot;007.hdr&quot;, &quot;008.hd…
+## $ date       &lt;date&gt; 2021-06-30, 2021-06-30, 2021-06-30, 2021-07-02, 2021-07-02, 2021-07-02, 2021-07-02, 2021-07-03…
+## $ time       &lt;time&gt; 16:19:35, 17:11:53, 22:02:40, 06:48:06, 07:38:56, 08:39:04, 10:00:26, 05:34:55, 06:53:00, 07:5…
+## $ lat        &lt;dbl&gt; 36.63733, 36.63733, 36.63750, 34.44383, 34.44583, 34.44517, 34.44783, 34.77833, 34.77800, 34.77…
+## $ lon        &lt;dbl&gt; -121.8855, -121.8855, -121.8855, -120.6200, -120.6710, -120.7378, -120.8265, -120.6950, -120.85…
+## $ year       &lt;dbl&gt; 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021,…
+## $ month      &lt;dbl&gt; 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,…
+## $ day        &lt;int&gt; 30, 30, 30, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 8, 8, 8, 8,…</code></pre>
 <pre class="r"><code># Duplicate station IDs
 dat.station.id %&gt;% count(station_id) %&gt;% 
   filter(n&gt;1)
@@ -1627,19 +1627,19 @@ projection</p>
 glimpse(dat.station.id.proj)</code></pre>
 <pre><code>## Rows: 209
 ## Columns: 13
-## $ station_id         [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;048&quot;, &quot;049&quot;, &quot;050&quot;, &quot;310_Sadie&quot;, &quot;Calibration&quot;, &quot;Leg3Calibration&quot;, &quot;Postcalibration&quot;, &quot;Precalibration&quot;…
-## $ filename           [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;048.hdr&quot;, &quot;049.hdr&quot;, &quot;050.hdr&quot;, &quot;047.hdr&quot;, &quot;2021-09-23-Postcalibration.hdr&quot;, &quot;2021-09-23-calibration.h…
-## $ date               [3m[38;5;246m&lt;date&gt;[39m[23m 2021-07-24, 2021-07-24, 2021-07-24, 2021-07-16, 2021-09-24, 2021-09-23, 2021-06-30, 2021-06-30, 2021-0…
-## $ time               [3m[38;5;246m&lt;time&gt;[39m[23m 09:50:38, 11:14:03, 12:24:55, 01:45:06, 00:39:18, 14:38:02, 22:02:40, 16:19:35, 01:23:23, 03:58:24, 09…
-## $ lat                [3m[38;5;246m&lt;dbl&gt;[39m[23m 38.11267, 38.11017, 38.11033, 43.68667, 47.62733, 47.62767, 36.63750, 36.63733, 36.97617, 47.31667, 36.…
-## $ lon                [3m[38;5;246m&lt;dbl&gt;[39m[23m -123.3317, -123.5238, -123.6027, -124.8328, -122.4068, -122.4062, -121.8855, -121.8855, -124.2690, -125…
-## $ year               [3m[38;5;246m&lt;dbl&gt;[39m[23m 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2…
-## $ month              [3m[38;5;246m&lt;dbl&gt;[39m[23m 7, 7, 7, 7, 9, 9, 6, 6, 6, 9, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7…
-## $ day                [3m[38;5;246m&lt;int&gt;[39m[23m 24, 24, 24, 16, 24, 23, 30, 30, 30, 17, 8, 8, 8, 8, 9, 9, 9, 9, 9, 10, 10, 10, 10, 11, 11, 11, 2, 2, 2,…
-## $ transect           [3m[38;5;246m&lt;int&gt;[39m[23m 48, 49, 50, 310, NA, NA, NA, NA, NA, NA, 13, 13, 13, 13, 15, 15, 15, 15, 15, 17, 17, 17, 17, 19, 19, 19…
-## $ bathy.bottom.depth [3m[38;5;246m&lt;dbl&gt;[39m[23m -148.04114, -358.70438, -1575.98645, -704.73352, -103.48846, -36.07777, -57.70178, -57.70178, -3997.433…
-## $ utm.lon.m          [3m[38;5;246m&lt;dbl&gt;[39m[23m 935685.0, 918791.1, 911861.8, 818757.1, 1014686.7, 1014737.3, 1063997.2, 1063997.3, 851149.2, 815480.8,…
-## $ utm.lat.m          [3m[38;5;246m&lt;dbl&gt;[39m[23m 844005.1, 843858.4, 843939.1, 1462030.7, 1894107.1, 1894143.8, 680590.7, 680572.2, 719049.8, 1862151.9,…</code></pre>
+## $ station_id         &lt;chr&gt; &quot;048&quot;, &quot;049&quot;, &quot;050&quot;, &quot;310_Sadie&quot;, &quot;Calibration&quot;, &quot;Leg3Calibration&quot;, &quot;Postcalibration&quot;, …
+## $ filename           &lt;chr&gt; &quot;048.hdr&quot;, &quot;049.hdr&quot;, &quot;050.hdr&quot;, &quot;047.hdr&quot;, &quot;2021-09-23-Postcalibration.hdr&quot;, &quot;2021-09-…
+## $ date               &lt;date&gt; 2021-07-24, 2021-07-24, 2021-07-24, 2021-07-16, 2021-09-24, 2021-09-23, 2021-06-30, 20…
+## $ time               &lt;time&gt; 09:50:38, 11:14:03, 12:24:55, 01:45:06, 00:39:18, 14:38:02, 22:02:40, 16:19:35, 01:23:…
+## $ lat                &lt;dbl&gt; 38.11267, 38.11017, 38.11033, 43.68667, 47.62733, 47.62767, 36.63750, 36.63733, 36.9761…
+## $ lon                &lt;dbl&gt; -123.3317, -123.5238, -123.6027, -124.8328, -122.4068, -122.4062, -121.8855, -121.8855,…
+## $ year               &lt;dbl&gt; 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 202…
+## $ month              &lt;dbl&gt; 7, 7, 7, 7, 9, 9, 6, 6, 6, 9, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, …
+## $ day                &lt;int&gt; 24, 24, 24, 16, 24, 23, 30, 30, 30, 17, 8, 8, 8, 8, 9, 9, 9, 9, 9, 10, 10, 10, 10, 11, …
+## $ transect           &lt;int&gt; 48, 49, 50, 310, NA, NA, NA, NA, NA, NA, 13, 13, 13, 13, 15, 15, 15, 15, 15, 17, 17, 17…
+## $ bathy.bottom.depth &lt;dbl&gt; -148.04114, -358.70438, -1575.98645, -704.73352, -103.48846, -36.07777, -57.70178, -57.…
+## $ utm.lon.m          &lt;dbl&gt; 935685.0, 918791.1, 911861.8, 818757.1, 1014686.7, 1014737.3, 1063997.2, 1063997.3, 851…
+## $ utm.lat.m          &lt;dbl&gt; 844005.1, 843858.4, 843939.1, 1462030.7, 1894107.1, 1894143.8, 680590.7, 680572.2, 7190…</code></pre>
 </div>
 <div id="distance-along-transect" class="section level2">
 <h2>Distance Along Transect</h2>
@@ -1687,13 +1687,13 @@ samples.no.station &lt;- dat.sample.id %&gt;%
 glimpse(samples.no.station)</code></pre>
 <pre><code>## Rows: 213
 ## Columns: 7
-## $ sample              [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;1&quot;, &quot;2&quot;, &quot;3&quot;, &quot;4&quot;, &quot;45&quot;, &quot;46&quot;, &quot;47&quot;, &quot;48&quot;, &quot;92&quot;, &quot;93&quot;, &quot;94&quot;, &quot;95&quot;, &quot;96&quot;, &quot;190&quot;, &quot;191&quot;, &quot;192&quot;, &quot;193&quot;, …
-## $ station             [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A…
-## $ Niskin              [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A…
-## $ depth               [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A…
-## $ drop.sample         [3m[38;5;246m&lt;chr&gt;[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA…
-## $ field.negative.type [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;Aerial.5min&quot;, &quot;Aerial.5min&quot;, &quot;Aerial.5min&quot;, &quot;Aerial.10h&quot;, &quot;Lab.H2O.reuse&quot;, &quot;Lab.H2O.dispose&quot;, &quot;Evap.H…
-## $ volume              [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;2&quot;, &quot;2&quot;, &quot;2.5&quot;, &quot;2.5&quot;, &quot;2.5&quot;, &quot;2.5&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;2&quot;, &quot;2&quot;, &quot;2.5&quot;…</code></pre>
+## $ sample              &lt;chr&gt; &quot;1&quot;, &quot;2&quot;, &quot;3&quot;, &quot;4&quot;, &quot;45&quot;, &quot;46&quot;, &quot;47&quot;, &quot;48&quot;, &quot;92&quot;, &quot;93&quot;, &quot;94&quot;, &quot;95&quot;, &quot;96&quot;, &quot;190&quot;, &quot;191&quot;…
+## $ station             &lt;chr&gt; &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N…
+## $ Niskin              &lt;chr&gt; &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N…
+## $ depth               &lt;chr&gt; &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N…
+## $ drop.sample         &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA…
+## $ field.negative.type &lt;chr&gt; &quot;Aerial.5min&quot;, &quot;Aerial.5min&quot;, &quot;Aerial.5min&quot;, &quot;Aerial.10h&quot;, &quot;Lab.H2O.reuse&quot;, &quot;Lab.H2O.d…
+## $ volume              &lt;chr&gt; &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;2&quot;, &quot;2&quot;, &quot;2.5&quot;, &quot;2.5&quot;, &quot;2.5&quot;, &quot;2.5&quot;, &quot;N/A&quot;, &quot;N/A&quot;, &quot;N/A&quot;,…</code></pre>
 <pre class="r"><code>dat.sample.id.filt &lt;- dat.sample.id %&gt;% 
   filter(!(station==&quot;N/A&quot;|station==&quot;-&quot;))</code></pre>
 <pre class="r"><code># Do the same for the station ID dataframe
@@ -1703,20 +1703,20 @@ station.id.NAs &lt;- dat.station.id.proj %&gt;%
 glimpse(station.id.NAs)</code></pre>
 <pre><code>## Rows: 10
 ## Columns: 14
-## $ station_id         [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;048&quot;, &quot;049&quot;, &quot;050&quot;, &quot;310_sadie&quot;, &quot;calibration&quot;, &quot;leg3calibration&quot;, &quot;postcalibration&quot;, &quot;precalibration&quot;…
-## $ filename           [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;048.hdr&quot;, &quot;049.hdr&quot;, &quot;050.hdr&quot;, &quot;047.hdr&quot;, &quot;2021-09-23-Postcalibration.hdr&quot;, &quot;2021-09-23-calibration.h…
-## $ date               [3m[38;5;246m&lt;date&gt;[39m[23m 2021-07-24, 2021-07-24, 2021-07-24, 2021-07-16, 2021-09-24, 2021-09-23, 2021-06-30, 2021-06-30, 2021-0…
-## $ time               [3m[38;5;246m&lt;time&gt;[39m[23m 09:50:38, 11:14:03, 12:24:55, 01:45:06, 00:39:18, 14:38:02, 22:02:40, 16:19:35, 01:23:23, 03:58:24
-## $ lat                [3m[38;5;246m&lt;dbl&gt;[39m[23m 38.11267, 38.11017, 38.11033, 43.68667, 47.62733, 47.62767, 36.63750, 36.63733, 36.97617, 47.31667
-## $ lon                [3m[38;5;246m&lt;dbl&gt;[39m[23m -123.3317, -123.5238, -123.6027, -124.8328, -122.4068, -122.4062, -121.8855, -121.8855, -124.2690, -12…
-## $ year               [3m[38;5;246m&lt;dbl&gt;[39m[23m 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021
-## $ month              [3m[38;5;246m&lt;dbl&gt;[39m[23m 7, 7, 7, 7, 9, 9, 6, 6, 6, 9
-## $ day                [3m[38;5;246m&lt;int&gt;[39m[23m 24, 24, 24, 16, 24, 23, 30, 30, 30, 17
-## $ transect           [3m[38;5;246m&lt;int&gt;[39m[23m 48, 49, 50, 310, NA, NA, NA, NA, NA, NA
-## $ bathy.bottom.depth [3m[38;5;246m&lt;dbl&gt;[39m[23m -148.04114, -358.70438, -1575.98645, -704.73352, -103.48846, -36.07777, -57.70178, -57.70178, -3997.433…
-## $ utm.lon.m          [3m[38;5;246m&lt;dbl&gt;[39m[23m 935685.0, 918791.1, 911861.8, 818757.1, 1014686.7, 1014737.3, 1063997.2, 1063997.3, 851149.2, 815480.8
-## $ utm.lat.m          [3m[38;5;246m&lt;dbl&gt;[39m[23m 844005.1, 843858.4, 843939.1, 1462030.7, 1894107.1, 1894143.8, 680590.7, 680572.2, 719049.8, 1862151.9
-## $ transect_dist_m    [38;5;246m[m][39m 0 [m], 0 [m], 0 [m], 0 [m], NA [m], NA [m], NA [m], NA [m], NA [m], NA [m]</code></pre>
+## $ station_id         &lt;chr&gt; &quot;048&quot;, &quot;049&quot;, &quot;050&quot;, &quot;310_sadie&quot;, &quot;calibration&quot;, &quot;leg3calibration&quot;, &quot;postcalibration&quot;, …
+## $ filename           &lt;chr&gt; &quot;048.hdr&quot;, &quot;049.hdr&quot;, &quot;050.hdr&quot;, &quot;047.hdr&quot;, &quot;2021-09-23-Postcalibration.hdr&quot;, &quot;2021-09-…
+## $ date               &lt;date&gt; 2021-07-24, 2021-07-24, 2021-07-24, 2021-07-16, 2021-09-24, 2021-09-23, 2021-06-30, 20…
+## $ time               &lt;time&gt; 09:50:38, 11:14:03, 12:24:55, 01:45:06, 00:39:18, 14:38:02, 22:02:40, 16:19:35, 01:23:…
+## $ lat                &lt;dbl&gt; 38.11267, 38.11017, 38.11033, 43.68667, 47.62733, 47.62767, 36.63750, 36.63733, 36.9761…
+## $ lon                &lt;dbl&gt; -123.3317, -123.5238, -123.6027, -124.8328, -122.4068, -122.4062, -121.8855, -121.8855,…
+## $ year               &lt;dbl&gt; 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021, 2021
+## $ month              &lt;dbl&gt; 7, 7, 7, 7, 9, 9, 6, 6, 6, 9
+## $ day                &lt;int&gt; 24, 24, 24, 16, 24, 23, 30, 30, 30, 17
+## $ transect           &lt;int&gt; 48, 49, 50, 310, NA, NA, NA, NA, NA, NA
+## $ bathy.bottom.depth &lt;dbl&gt; -148.04114, -358.70438, -1575.98645, -704.73352, -103.48846, -36.07777, -57.70178, -57.…
+## $ utm.lon.m          &lt;dbl&gt; 935685.0, 918791.1, 911861.8, 818757.1, 1014686.7, 1014737.3, 1063997.2, 1063997.3, 851…
+## $ utm.lat.m          &lt;dbl&gt; 844005.1, 843858.4, 843939.1, 1462030.7, 1894107.1, 1894143.8, 680590.7, 680572.2, 7190…
+## $ transect_dist_m    [m] 0 [m], 0 [m], 0 [m], 0 [m], NA [m], NA [m], NA [m], NA [m], NA [m], NA [m]</code></pre>
 <pre class="r"><code>dat.station.id.filt &lt;- dat.station.id.proj %&gt;% 
   filter(grepl(&quot;x&quot;,station_id))</code></pre>
 <p>Now join the two filtered datasets</p>
@@ -1736,22 +1736,22 @@ glimpse(station.id.NAs)</code></pre>
 <pre class="r"><code>glimpse(dat.stand)</code></pre>
 <pre><code>## Rows: 743
 ## Columns: 16
-## $ qPCR               [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21…
-## $ well               [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;A1&quot;, &quot;A2&quot;, &quot;A3&quot;, &quot;B2&quot;, &quot;B3&quot;, &quot;C1&quot;, &quot;C2&quot;, &quot;C3&quot;, &quot;D1&quot;, &quot;D2&quot;, &quot;D3&quot;, &quot;E1&quot;, &quot;E2&quot;, &quot;E3&quot;, &quot;F1&quot;, &quot;F2&quot;, &quot;F3&quot;, &quot;…
-## $ sample             [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;E05&quot;, &quot;E05&quot;, &quot;E05&quot;, &quot;E04&quot;, &quot;E04&quot;, &quot;E03&quot;, &quot;E03&quot;, &quot;E03&quot;, &quot;E02&quot;, &quot;E02&quot;, &quot;E02&quot;, &quot;E01&quot;, &quot;E01&quot;, &quot;E01&quot;, &quot;5&quot;, …
-## $ type               [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBl…
-## $ task               [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDA…
-## $ IPC_Ct             [3m[38;5;246m&lt;dbl&gt;[39m[23m 34.223, 32.073, 31.979, 26.961, 27.064, 26.507, 26.688, 26.629, 26.689, 26.699, 26.703, 26.763, 26.689,…
-## $ inhibition_rate    [3m[38;5;246m&lt;dbl&gt;[39m[23m 7.528, 5.378, 5.284, 0.266, 0.369, -0.188, -0.007, -0.066, -0.006, 0.004, 0.008, 0.068, -0.006, 0.172, …
-## $ useful             [3m[38;5;246m&lt;chr&gt;[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
-## $ Zymo               [3m[38;5;246m&lt;lgl&gt;[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
-## $ dilution           [3m[38;5;246m&lt;lgl&gt;[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
-## $ hake_Ct            [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;20.013&quot;, &quot;19.967&quot;, &quot;19.402&quot;, &quot;23.241&quot;, &quot;23.368&quot;, &quot;26.09&quot;, &quot;26.109&quot;, &quot;26.245&quot;, &quot;29.933&quot;, &quot;29.676&quot;, &quot;29.…
-## $ hake_copies_ul     [3m[38;5;246m&lt;dbl&gt;[39m[23m 1e+05, 1e+05, 1e+05, 1e+04, 1e+04, 1e+03, 1e+03, 1e+03, 1e+02, 1e+02, 1e+02, 1e+01, 1e+01, 1e+01, 5e+00…
-## $ lamprey_Ct         [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;19.11&quot;, &quot;18.94&quot;, &quot;18.59&quot;, &quot;22.23&quot;, &quot;22.23&quot;, &quot;25.15&quot;, &quot;25.30&quot;, &quot;25.13&quot;, &quot;28.60&quot;, &quot;28.43&quot;, &quot;28.50&quot;, &quot;31.…
-## $ lamprey_copies_ul  [3m[38;5;246m&lt;dbl&gt;[39m[23m 1e+05, 1e+05, 1e+05, 1e+04, 1e+04, 1e+03, 1e+03, 1e+03, 1e+02, 1e+02, 1e+02, 1e+01, 1e+01, 1e+01, 5e+00…
-## $ eulachon_Ct        [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;20.57&quot;, &quot;20.45&quot;, &quot;20.01&quot;, &quot;23.79&quot;, &quot;23.88&quot;, &quot;26.95&quot;, &quot;26.87&quot;, &quot;26.73&quot;, &quot;30.33&quot;, &quot;30.30&quot;, &quot;30.31&quot;, &quot;33.…
-## $ eulachon_copies_ul [3m[38;5;246m&lt;dbl&gt;[39m[23m 1e+05, 1e+05, 1e+05, 1e+04, 1e+04, 1e+03, 1e+03, 1e+03, 1e+02, 1e+02, 1e+02, 1e+01, 1e+01, 1e+01, 5e+00…</code></pre>
+## $ qPCR               &lt;chr&gt; &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;,…
+## $ well               &lt;chr&gt; &quot;A1&quot;, &quot;A2&quot;, &quot;A3&quot;, &quot;B2&quot;, &quot;B3&quot;, &quot;C1&quot;, &quot;C2&quot;, &quot;C3&quot;, &quot;D1&quot;, &quot;D2&quot;, &quot;D3&quot;, &quot;E1&quot;, &quot;E2&quot;, &quot;E3&quot;, &quot;F1…
+## $ sample             &lt;chr&gt; &quot;E05&quot;, &quot;E05&quot;, &quot;E05&quot;, &quot;E04&quot;, &quot;E04&quot;, &quot;E03&quot;, &quot;E03&quot;, &quot;E03&quot;, &quot;E02&quot;, &quot;E02&quot;, &quot;E02&quot;, &quot;E01&quot;, &quot;E0…
+## $ type               &lt;chr&gt; &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;, &quot;gBlocks&quot;,…
+## $ task               &lt;chr&gt; &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;STANDARD&quot;, &quot;ST…
+## $ IPC_Ct             &lt;dbl&gt; 34.223, 32.073, 31.979, 26.961, 27.064, 26.507, 26.688, 26.629, 26.689, 26.699, 26.703,…
+## $ inhibition_rate    &lt;dbl&gt; 7.528, 5.378, 5.284, 0.266, 0.369, -0.188, -0.007, -0.066, -0.006, 0.004, 0.008, 0.068,…
+## $ useful             &lt;chr&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
+## $ Zymo               &lt;lgl&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
+## $ dilution           &lt;lgl&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
+## $ hake_Ct            &lt;chr&gt; &quot;20.013&quot;, &quot;19.967&quot;, &quot;19.402&quot;, &quot;23.241&quot;, &quot;23.368&quot;, &quot;26.09&quot;, &quot;26.109&quot;, &quot;26.245&quot;, &quot;29.933&quot;…
+## $ hake_copies_ul     &lt;dbl&gt; 1e+05, 1e+05, 1e+05, 1e+04, 1e+04, 1e+03, 1e+03, 1e+03, 1e+02, 1e+02, 1e+02, 1e+01, 1e+…
+## $ lamprey_Ct         &lt;chr&gt; &quot;19.11&quot;, &quot;18.94&quot;, &quot;18.59&quot;, &quot;22.23&quot;, &quot;22.23&quot;, &quot;25.15&quot;, &quot;25.30&quot;, &quot;25.13&quot;, &quot;28.60&quot;, &quot;28.43…
+## $ lamprey_copies_ul  &lt;dbl&gt; 1e+05, 1e+05, 1e+05, 1e+04, 1e+04, 1e+03, 1e+03, 1e+03, 1e+02, 1e+02, 1e+02, 1e+01, 1e+…
+## $ eulachon_Ct        &lt;chr&gt; &quot;20.57&quot;, &quot;20.45&quot;, &quot;20.01&quot;, &quot;23.79&quot;, &quot;23.88&quot;, &quot;26.95&quot;, &quot;26.87&quot;, &quot;26.73&quot;, &quot;30.33&quot;, &quot;30.30…
+## $ eulachon_copies_ul &lt;dbl&gt; 1e+05, 1e+05, 1e+05, 1e+04, 1e+04, 1e+03, 1e+03, 1e+03, 1e+02, 1e+02, 1e+02, 1e+01, 1e+…</code></pre>
 <pre class="r"><code># fix some columns
 dat.stand &lt;- dat.stand %&gt;% 
   dplyr::select(qPCR,well,sample,IPC_Ct,inhibition_rate,task,contains(&#39;eulachon&#39;)) %&gt;% 
@@ -1778,9 +1778,9 @@ stand.summary &lt;- dat.stand %&gt;% count(qPCR,copies_ul,name=&quot;N&quot;)
 glimpse(stand.summary)</code></pre>
 <pre><code>## Rows: 217
 ## Columns: 3
-## $ qPCR      [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_02&quot;, &quot;H21_02&quot;, &quot;H21_02&quot;, &quot;H21_02&quot;, &quot;H…
-## $ copies_ul [3m[38;5;246m&lt;dbl&gt;[39m[23m 1e+00, 5e+00, 1e+01, 1e+02, 1e+03, 1e+04, 1e+05, 1e+00, 5e+00, 1e+01, 1e+02, 1e+03, 1e+04, 1e+05, 1e+00, 5e+00, …
-## $ N         [3m[38;5;246m&lt;int&gt;[39m[23m 6, 3, 3, 3, 3, 3, 3, 9, 3, 3, 3, 3, 3, 3, 6, 3, 3, 3, 3, 3, 3, 6, 3, 3, 3, 3, 3, 3, 6, 3, 3, 3, 3, 2, 3, 6, 3, 3…</code></pre>
+## $ qPCR      &lt;chr&gt; &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_01&quot;, &quot;H21_02&quot;, &quot;H21_02&quot;, &quot;H21_0…
+## $ copies_ul &lt;dbl&gt; 1e+00, 5e+00, 1e+01, 1e+02, 1e+03, 1e+04, 1e+05, 1e+00, 5e+00, 1e+01, 1e+02, 1e+03, 1e+04, 1e+05…
+## $ N         &lt;int&gt; 6, 3, 3, 3, 3, 3, 3, 9, 3, 3, 3, 3, 3, 3, 6, 3, 3, 3, 3, 3, 3, 6, 3, 3, 3, 3, 3, 3, 6, 3, 3, 3, …</code></pre>
 <div id="save" class="section level2">
 <h2>Save</h2>
 <pre class="r"><code>write_rds(dat.stand,here(&#39;data&#39;,&#39;qPCR&#39;,&#39;eulachon qPCR 2021 standards cleaned 11_20_2023.rds&#39;))</code></pre>
@@ -1806,17 +1806,17 @@ non-template controls</p>
 glimpse(dat.samp)</code></pre>
 <pre><code>## Rows: 8,227
 ## Columns: 11
-## $ qPCR               [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21…
-## $ well               [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;A4&quot;, &quot;A5&quot;, &quot;A6&quot;, &quot;A7&quot;, &quot;A8&quot;, &quot;A9&quot;, &quot;A10&quot;, &quot;A11&quot;, &quot;A12&quot;, &quot;A13&quot;, &quot;A14&quot;, &quot;A15&quot;, &quot;A16&quot;, &quot;A17&quot;, &quot;A18&quot;, &quot;A19…
-## $ sample             [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;S1&quot;, &quot;S1&quot;, &quot;S1&quot;, &quot;S9&quot;, &quot;S9&quot;, &quot;S9&quot;, &quot;S17&quot;, &quot;S17&quot;, &quot;S17&quot;, &quot;S25&quot;, &quot;S25&quot;, &quot;S25&quot;, &quot;S33&quot;, &quot;S33&quot;, &quot;S33&quot;, &quot;S41…
-## $ IPC_Ct             [3m[38;5;246m&lt;dbl&gt;[39m[23m 26.893, 26.698, 26.804, 26.808, 26.788, 26.533, 26.891, 26.811, 26.733, 26.738, 26.809, 26.968, 26.797,…
-## $ inhibition_rate    [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;0.198&quot;, &quot;0.003&quot;, &quot;0.109&quot;, &quot;0.113&quot;, &quot;0.093&quot;, &quot;-0.162&quot;, &quot;0.196&quot;, &quot;0.116&quot;, &quot;0.038&quot;, &quot;0.043&quot;, &quot;0.114&quot;, &quot;0.…
-## $ task               [3m[38;5;246m&lt;chr&gt;[39m[23m &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNK…
-## $ Zymo               [3m[38;5;246m&lt;lgl&gt;[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
-## $ dilution           [3m[38;5;246m&lt;dbl&gt;[39m[23m 0.5, 0.5, 0.5, NA, NA, NA, NA, NA, NA, NA, NA, NA, 0.5, 0.5, 0.5, NA, NA, NA, NA, NA, NA, 0.5, 0.5, 0.5…
-## $ Ct                 [3m[38;5;246m&lt;dbl&gt;[39m[23m -99.00, -99.00, -99.00, -99.00, -99.00, -99.00, -99.00, -99.00, -99.00, -99.00, -99.00, -99.00, -99.00,…
-## $ copies_ul          [3m[38;5;246m&lt;dbl&gt;[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
-## $ eulachon.confirmed [3m[38;5;246m&lt;lgl&gt;[39m[23m NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…</code></pre>
+## $ qPCR               &lt;chr&gt; &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;, &quot;H21_S01&quot;,…
+## $ well               &lt;chr&gt; &quot;A4&quot;, &quot;A5&quot;, &quot;A6&quot;, &quot;A7&quot;, &quot;A8&quot;, &quot;A9&quot;, &quot;A10&quot;, &quot;A11&quot;, &quot;A12&quot;, &quot;A13&quot;, &quot;A14&quot;, &quot;A15&quot;, &quot;A16&quot;, &quot;A…
+## $ sample             &lt;chr&gt; &quot;S1&quot;, &quot;S1&quot;, &quot;S1&quot;, &quot;S9&quot;, &quot;S9&quot;, &quot;S9&quot;, &quot;S17&quot;, &quot;S17&quot;, &quot;S17&quot;, &quot;S25&quot;, &quot;S25&quot;, &quot;S25&quot;, &quot;S33&quot;, &quot;S…
+## $ IPC_Ct             &lt;dbl&gt; 26.893, 26.698, 26.804, 26.808, 26.788, 26.533, 26.891, 26.811, 26.733, 26.738, 26.809,…
+## $ inhibition_rate    &lt;chr&gt; &quot;0.198&quot;, &quot;0.003&quot;, &quot;0.109&quot;, &quot;0.113&quot;, &quot;0.093&quot;, &quot;-0.162&quot;, &quot;0.196&quot;, &quot;0.116&quot;, &quot;0.038&quot;, &quot;0.04…
+## $ task               &lt;chr&gt; &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;, &quot;UNKNOWN&quot;,…
+## $ Zymo               &lt;lgl&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
+## $ dilution           &lt;dbl&gt; 0.5, 0.5, 0.5, NA, NA, NA, NA, NA, NA, NA, NA, NA, 0.5, 0.5, 0.5, NA, NA, NA, NA, NA, N…
+## $ Ct                 &lt;dbl&gt; -99, -99, -99, -99, -99, -99, -99, -99, -99, -99, -99, -99, -99, -99, -99, -99, -99, -9…
+## $ copies_ul          &lt;dbl&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…
+## $ eulachon.confirmed &lt;lgl&gt; NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA, NA,…</code></pre>
 <div id="join-ids-to-samples" class="section level2">
 <h2>Join IDs to Samples</h2>
 <pre class="r"><code>dat.samp &lt;- dat.samp %&gt;% 

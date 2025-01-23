@@ -2,7 +2,6 @@
 # see https://github.com/ericward-noaa/sdmTMB-stdcurve/blob/main/R/fit.R
 
 library(contoureR)
-library(scales)
 
 plot_theme <- theme_minimal()+theme(panel.border = element_rect(color="black",fill=NA))
 theme_black <- theme_minimal()+theme(panel.border = element_rect(color="black",fill=NA),text=element_text(color='white'))
@@ -47,7 +46,7 @@ make_pred_obs_plots <- function(modelobj,stands, model_name="",saveplots=T,savet
     geom_jitter(aes(y=Ct_bin,x=known_conc_ul),width=0,alpha=0.5,height=0.05) +
     geom_point(aes(y=plogis(theta_stand),x=known_conc_ul),color="red") +
     geom_line(aes(y=plogis(theta_stand),x=known_conc_ul,group=plate),color="red") +
-    scale_x_continuous(trans="log10",breaks = STAND.BREAKS,labels=label_comma())+
+    scale_x_continuous(trans="log10",breaks = STAND.BREAKS)+
     facet_wrap(~year) + 
     labs(x="Known Concentration (copies/uL)",y="Ct",title="Standards: Binary")
   
@@ -57,7 +56,7 @@ make_pred_obs_plots <- function(modelobj,stands, model_name="",saveplots=T,savet
     geom_line(aes(y=kappa_stand,x=known_conc_ul,group=plate,color=plate)) +
     # geom_line(aes(y=kappa_plus,x=known_conc_ul),color="red",linetype="dashed") +
     # geom_line(aes(y=kappa_minus,x=known_conc_ul),color="red",linetype="dashed") +
-    scale_x_continuous(trans="log10",breaks = STAND.BREAKS,labels=label_comma())+
+    scale_x_continuous(trans="log10",breaks = STAND.BREAKS)+
     guides(color='none')+
     facet_wrap(~year) +
     labs(x="Known Concentration (copies/uL)",y="Ct",title="Standards: Positive")
@@ -152,11 +151,6 @@ bdf <- fortify(b) %>%
   st_as_sf(coords=c("x","y"),crs=4326) %>% 
   st_transform(pred.crs) %>%
   mutate(x=st_coordinates(.)[,1],y=st_coordinates(.)[,2])
-bdf200 <- fortify(b) %>% 
-  contoureR::getContourLines(levels=c(-200)) %>% 
-  st_as_sf(coords=c("x","y"),crs=4326) %>% 
-  st_transform(pred.crs) %>%
-  mutate(x=st_coordinates(.)[,1],y=st_coordinates(.)[,2])
 
 # bathy.only.map <- ggplot(bdf,aes(x,y,group=Group,colour=factor(z))) + geom_path()
 # bathy.only.map+coord_equal()
@@ -167,9 +161,8 @@ coastcrop = st_crop(coast,bbox)
 bathycrop <- st_crop(bdf,bbox) %>% st_set_geometry(NULL)
 
 make_map <- function(dat, column) {
-  ggplot() + 
+  ggplot(coastcrop) + geom_sf()+
     geom_raster(data=dat, aes(x, y, fill = {{ column }})) +
-    geom_sf(data=coastcrop)+
     facet_grid(year~depth_cat)+
     theme_minimal()+
     labs(x="",y="")+
@@ -178,11 +171,9 @@ make_map <- function(dat, column) {
 }
 
 make_map_bathy <- function(dat, column) {
-  use_bathy <- bathycrop %>% filter(z==-150)
-  ggplot() +
+  ggplot() + geom_sf(data=coastcrop)+
     geom_raster(data=dat, aes(x, y, fill = {{ column }})) +
-    geom_sf(data=coastcrop)+
-    geom_path(data=use_bathy,aes(x,y,group=Group),color='gray30',linewidth=0.25)+
+    geom_path(data=bathycrop,aes(x,y,group=Group),color='gray30',linewidth=0.5)+
     facet_grid(year~depth_cat)+
     theme_minimal()+
     theme(panel.border = element_rect(color='black',fill=NA),
@@ -210,8 +201,7 @@ make_presence_absence_map <- function(modelobj,predgrid=grid.pred){
                   mutate(top5=ifelse(pa>=0.95,T,F)), aes(x, y, fill = top5)) +
     facet_grid(year~depth_cat)+
     labs(fill="95% p(presence)")+
-    scale_fill_manual(values=c('gray20','#5DC863FF'))+
-    # scale_fill_manual(values=c('gray20','#BD3786FF'))+
+    scale_fill_manual(values=c('gray20','#BD3786FF'))+
     theme_minimal()+
     theme(panel.border = element_rect(color='black',fill=NA),
           axis.text.x=element_blank())
